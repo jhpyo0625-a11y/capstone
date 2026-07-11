@@ -258,10 +258,12 @@ watcher (Task Scheduler, hourly count + weekly forced)
 - [x] Preprocess cache (`artifacts/cache/`, 384² PNG) + EDA report (`artifacts/eda/eda_report.md`)
 - *Acceptance: manifest covers 100% of files ✅; leakage test green ✅; ROI spot-check sheet → `artifacts/eda/roi_spotcheck.html`, **awaiting user approval**.*
 
-**Phase 2 — Splits**
-- [ ] Grouped stratified split on the confirmed labels; freeze `test_v1`
-- [ ] Leakage unit test (no run overlap between splits)
-- *Acceptance: split summary table (runs/images/classes per split) approved.*
+**Phase 2 — Splits** *(built 2026-07-11)*
+- [x] Grouped stratified split — deterministic exhaustive search over run combos
+  (no RNG; constraints + target fractions in `configs/config.yaml`); `test_v1`
+  written and freeze mechanism verified (rerun refuses to rewrite it; `--refreeze` = deliberate re-baseline)
+- [x] Leakage unit test (zero run overlap between splits; every valid image in exactly one split)
+- *Acceptance: split summary table (runs/images/classes per split) **approved by user 2026-07-11**; `test_v1` (6 runs / 146 images, ~18% per class) is now the frozen baseline.* ✅
 
 **Phase 3 — Training**
 - [ ] Datamodule + augmentation + class weights

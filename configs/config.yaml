@@ -52,9 +52,27 @@ preprocess:
 
 split:
   group_by: run                         # NEVER split per-image (spec §6.2)
-  val_frac: 0.20
-  test_manifest: artifacts/manifests/test_v1.csv
-  seed: 42
+  version: 1                            # test_v1 is frozen once approved; bumping = deliberate re-baseline
+  # Deterministic exhaustive search over run combinations — no RNG. A combo is
+  # feasible if it meets the min_* constraints, keeps every class fraction inside
+  # class_frac_window, and never exhausts a layout (train keeps >=1 run of each).
+  # Best combo = per-class image fractions closest to class_frac_target.
+  test:
+    n_runs: [6]
+    min_dent_runs: 2
+    min_loose_runs: 2
+    min_pass_images: 50
+    min_layouts: 2
+    class_frac_target: 0.18
+    class_frac_window: [0.10, 0.28]
+  val:                                  # fractions are of the pool remaining after test removal
+    n_runs: [4, 5, 6]
+    min_dent_runs: 1
+    min_loose_runs: 1
+    min_pass_images: 40
+    min_layouts: 1
+    class_frac_target: 0.20
+    class_frac_window: [0.10, 0.35]
 
 train:
   backbone: efficientnet_b0
