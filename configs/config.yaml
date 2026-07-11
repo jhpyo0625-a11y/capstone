@@ -1,0 +1,79 @@
+# Every knob lives here (spec §5). Code must read these values via coilvision.config —
+# never hardcode paths, hyperparameters, or thresholds.
+
+paths:
+  dataset_dir: Coil-image-Dataset      # RAW data — read-only, never modified
+  incoming_dir: incoming
+  quarantine_dir: quarantine
+  artifacts_dir: artifacts
+  cache_dir: artifacts/cache
+  manifests_dir: artifacts/manifests
+  models_dir: models
+  production_dir: models/production
+
+data:
+  classes: [Pass, Dent, Loose]
+  expected_width: 2448
+  expected_height: 2048
+  # Filename fields (run/part#/shot#/code) are provenance metadata ONLY — never
+  # model inputs or label logic (spec §2). run is also the split-grouping key.
+  filename_pattern: '^(?P<run>\d{6}_\d{6})_A35W_(?P<part>\d+)-(?P<shot>\d+)\s*\[(?P<code>\d+)\]\.bmp$'
+
+preprocess:
+  version: 1                            # bump on any preprocessing change; cache + POINTER.json key on it
+  # Measured 2026-07-11: red OSD text occupies rows 1822-1858 (cols <= ~650) at
+  # 2048 height. 0.125 keeps rows 0-1791, a 30px margin above the text.
+  # (Spec originally assumed ~8% — that would NOT have removed the text.)
+  osd_crop_bottom_frac: 0.125
+  red_text:                             # leakage detector: pure-red OSD pixels (text is RGB 255,0,0)
+    r_min: 170
+    g_max: 50
+    b_max: 50
+  roi:
+    # Texture-density detector: the winding is the only dense fine-stripe coppery
+    # region. Tuned visually on both layouts 2026-07-11 (aspect 2.6-3.3, area
+    # 0.14-0.19 across 8 diverse samples).
+    det_width: 1224                     # detection at 1/2 scale (wire pitch ~3px here)
+    hue_max: 25                         # copper/orange hues (OpenCV H 0-180)
+    sat_min: 40
+    val_min: 90
+    highpass_sigma: 2.0                 # band-pass: |gray - blur(gray, sigma)|
+    density_sigma: 18                   # local texture-energy pooling
+    peak_frac: 0.35                     # region-grow threshold relative to density peak
+    center_region: {x0: 0.10, x1: 0.90, y0: 0.15, y1: 0.85}
+    min_area_frac: 0.02
+    max_area_frac: 0.30
+    min_aspect: 1.2
+    max_aspect: 6.0
+    max_width_frac: 0.80                # wider than this = grabbed the whole board strip
+    pad_frac: 0.15
+    fallback_crop: {x0: 0.05, x1: 0.95, y0: 0.20, y1: 0.72}
+  resize: 384
+
+split:
+  group_by: run                         # NEVER split per-image (spec §6.2)
+  val_frac: 0.20
+  test_manifest: artifacts/manifests/test_v1.csv
+  seed: 42
+
+train:
+  backbone: efficientnet_b0
+  fallback_backbone: convnext_tiny
+  input_size: 384
+  batch_size: 16
+  stage1: {lr: 3.0e-3, epochs: 3}       # head only
+  stage2: {lr: 1.0e-4, max_epochs: 30}  # full network, cosine decay
+  early_stop_patience: 5                # on val fail-recall
+  seed: 42
+
+eval:
+  fail_recall_target: 0.95              # primary gate metric; macro-F1 tiebreak
+
+gate:
+  # promote iff candidate fail-recall >= production AND candidate macro-F1 > production
+  require_fail_recall_not_worse: true
+  require_macro_f1_better: true
+
+retrain:
+  min_new_images: 50
+  max_days_between: 7

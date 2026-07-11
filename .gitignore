@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+label-image/
+
+# raw data never leaves this machine (spec: local-only)
+Coil-image-Dataset/
+incoming/
+quarantine/
+
+# generated outputs; manifests are versioned (frozen test splits live there)
+artifacts/*
+!artifacts/manifests/
+models/
