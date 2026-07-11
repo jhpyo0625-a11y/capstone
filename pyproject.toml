@@ -1,0 +1,33 @@
+[project]
+name = "coilvision"
+version = "0.1.0"
+description = "Local CPU-only coil defect classifier: Pass / Dent / Loose with Grad-CAM and gated retraining"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "torch",
+    "timm",
+    "opencv-python",
+    "pandas",
+    "scikit-learn",
+    "grad-cam",
+    "matplotlib",
+    "pyyaml",
+    "tabulate",
+]
+
+[project.scripts]
+coil-predict = "coilvision.predict.cli:main"
+
+[dependency-groups]
+dev = ["pytest"]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-root = ""
+module-name = "coilvision"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
