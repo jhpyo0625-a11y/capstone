@@ -81,8 +81,15 @@ train:
   batch_size: 16
   stage1: {lr: 3.0e-3, epochs: 3}       # head only
   stage2: {lr: 1.0e-4, max_epochs: 30}  # full network, cosine decay
-  early_stop_patience: 5                # on val fail-recall
+  early_stop_patience: 5                # on val (fail-recall, macro-F1)
   seed: 42
+  augment:                              # train only; NO hue shifts (copper color is signal)
+    hflip_p: 0.5
+    vflip_p: 0.5
+    rotate_deg: 5
+    brightness: 0.15
+    contrast: 0.15
+    rrc_scale: [0.90, 1.00]             # slight random-resized-crop
 
 eval:
   fail_recall_target: 0.95              # primary gate metric; macro-F1 tiebreak
