@@ -68,15 +68,30 @@ def cluster_layouts(run_signatures: dict[str, np.ndarray], corr_threshold: float
     return assignment
 
 
+def data_roots(cfg: dict) -> list[tuple[str, Path]]:
+    """The image roots the manifest covers: the read-only raw dataset plus the
+    accepted-incoming mirror (present once the retrain pipeline has ingested)."""
+    roots = [("dataset", resolve_path(cfg, "dataset_dir"))]
+    accepted = resolve_path(cfg, "accepted_dir")
+    if accepted.exists():
+        roots.append(("accepted", accepted))
+    return roots
+
+
+def image_path(cfg: dict, root: str, relpath: str | Path) -> Path:
+    key = "dataset_dir" if root == "dataset" else "accepted_dir"
+    return resolve_path(cfg, key) / relpath
+
+
 def build_manifest(cfg: dict) -> pd.DataFrame:
-    dataset_dir = resolve_path(cfg, "dataset_dir")
     pattern = cfg["data"]["filename_pattern"]
     exp_w, exp_h = cfg["data"]["expected_width"], cfg["data"]["expected_height"]
 
     rows = []
     thumbs: dict[int, np.ndarray] = {}  # row index -> gray thumb, for layout clustering
-    for path in sorted(dataset_dir.rglob("*.bmp")):
-        relpath = path.relative_to(dataset_dir)
+    paths = [(root, p, base) for root, base in data_roots(cfg) for p in sorted(base.rglob("*.bmp"))]
+    for root, path, base in paths:
+        relpath = path.relative_to(base)
         issues = []
         cls = class_from_relpath(relpath)
         if cls is None:
@@ -108,6 +123,7 @@ def build_manifest(cfg: dict) -> pd.DataFrame:
         rows.append(
             {
                 "relpath": str(relpath),
+                "root": root,
                 "filename": path.name,
                 "class": cls or "",
                 **parsed,

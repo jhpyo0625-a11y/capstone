@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 
 from coilvision.config import load_config, resolve_path
+from coilvision.data.manifest import image_path
 
 
 def crop_osd(img: np.ndarray, bottom_frac: float) -> np.ndarray:
@@ -147,7 +148,6 @@ def build_cache(manifest: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     reused from the previous index without recomputation. Per-image failures are
     reported and skipped, never aborting the build.
     """
-    dataset_dir = resolve_path(cfg, "dataset_dir")
     cache_dir = resolve_path(cfg, "cache_dir")
     cache_dir.mkdir(parents=True, exist_ok=True)
     index_path = cache_index_path(cfg)
@@ -164,11 +164,13 @@ def build_cache(manifest: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     todo = manifest[manifest["valid"]].rename(columns={"class": "cls"})
     for i, row in enumerate(todo.itertuples(), 1):
         out_path = cache_path_for(row.hash, cfg)
+        root = getattr(row, "root", "dataset")
         prev_row = prev_by_hash.get(row.hash)
         if prev_row is not None and prev_row["cache_file"] == out_path.name and out_path.exists():
             records.append(
                 {
                     "relpath": row.relpath,
+                    "root": root,
                     "hash": row.hash,
                     "class": row.cls,
                     "run": row.run,
@@ -183,7 +185,7 @@ def build_cache(manifest: pd.DataFrame, cfg: dict) -> pd.DataFrame:
             reused += 1
             continue
         try:
-            img = cv2.imread(str(dataset_dir / row.relpath))
+            img = cv2.imread(str(image_path(cfg, root, row.relpath)))
             if img is None:
                 raise ValueError("unreadable image")
             processed, meta = preprocess_image(img, cfg)
@@ -195,6 +197,7 @@ def build_cache(manifest: pd.DataFrame, cfg: dict) -> pd.DataFrame:
         records.append(
             {
                 "relpath": row.relpath,
+                "root": root,
                 "hash": row.hash,
                 "class": row.cls,
                 "run": row.run,
@@ -217,7 +220,6 @@ def build_cache(manifest: pd.DataFrame, cfg: dict) -> pd.DataFrame:
 
 def write_spotcheck_sheet(index: pd.DataFrame, cfg: dict, out_html: Path, thumb_width: int = 440) -> None:
     """HTML contact sheet: ROI bbox drawn on one image per run + every low-confidence detection."""
-    dataset_dir = resolve_path(cfg, "dataset_dir")
     sample = index.groupby("run", group_keys=False).head(1)
     lowconf = index[~index["roi_confident"]]
     chosen = (
@@ -229,7 +231,7 @@ def write_spotcheck_sheet(index: pd.DataFrame, cfg: dict, out_html: Path, thumb_
 
     cells = []
     for row in chosen.itertuples():
-        img = cv2.imread(str(dataset_dir / row.relpath))
+        img = cv2.imread(str(image_path(cfg, getattr(row, "root", "dataset"), row.relpath)))
         if img is None:
             print(f"  WARN: could not read {row.relpath}, skipped in spot-check sheet")
             continue

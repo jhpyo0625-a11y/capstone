@@ -48,21 +48,28 @@ class TestManifestIntegration:
     def df(self):
         return pd.read_csv(MANIFEST, keep_default_na=False)
 
-    def test_covers_every_dataset_file(self, df):
-        n_files = sum(1 for _ in resolve_path(CFG, "dataset_dir").rglob("*.bmp"))
+    def test_covers_every_file_across_roots(self, df):
+        from coilvision.data.manifest import data_roots
+
+        n_files = sum(1 for _, base in data_roots(CFG) for _ in base.rglob("*.bmp"))
         assert len(df) == n_files
 
     def test_all_valid(self, df):
         assert df["valid"].all(), df.loc[~df["valid"], ["relpath", "issues"]].to_string()
 
-    def test_expected_class_counts(self, df):
-        counts = df["class"].value_counts()
+    def test_raw_dataset_root_is_immutable(self, df):
+        # the read-only raw dataset must never change; accepted-incoming only ADDS
+        raw = df[df.get("root", "dataset") == "dataset"]
+        counts = raw["class"].value_counts()
         assert counts["Pass"] == 633
         assert counts["Loose"] == 110
         assert counts["Dent"] == 74
+        assert raw["run"].nunique() == 28
 
-    def test_expected_run_count(self, df):
-        assert df["run"].nunique() == 28
+    def test_totals_only_grow(self, df):
+        counts = df["class"].value_counts()
+        assert counts["Pass"] >= 633 and counts["Loose"] >= 110 and counts["Dent"] >= 74
+        assert df["run"].nunique() >= 28
 
     def test_layout_clusters_found(self, df):
         # spec §2: at least 2 distinct board layouts

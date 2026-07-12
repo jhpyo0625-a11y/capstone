@@ -4,6 +4,7 @@
 paths:
   dataset_dir: Coil-image-Dataset      # RAW data — read-only, never modified
   incoming_dir: incoming
+  accepted_dir: data_accepted          # validated incoming images merge here (same class structure)
   quarantine_dir: quarantine
   artifacts_dir: artifacts
   cache_dir: artifacts/cache
@@ -140,4 +141,5 @@ gate:
 
 retrain:
   min_new_images: 50
-  max_days_between: 7
+  max_days_between: 7                   # force a cycle if ANY new images waited this long
+  lock_stale_hours: 6                   # a lock older than this is from a crashed run; break it

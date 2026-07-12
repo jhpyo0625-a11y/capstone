@@ -72,15 +72,17 @@ def test_patch_dataset_key_sensitive_to_sampling_params():
 
     cfg = anomaly_cfg(load_config())
     ann = {"a.bmp": entry()}
-    base = dataset_key(cfg, ann)
-    assert dataset_key(cfg, ann) == base  # deterministic
+    hashes = ["h1", "h2"]
+    base = dataset_key(cfg, ann, hashes)
+    assert dataset_key(cfg, ann, ["h2", "h1"]) == base  # order-insensitive, deterministic
 
     tweaked = copy.deepcopy(cfg)
     tweaked["patchclf"]["negatives_per_image"] += 1
-    assert dataset_key(tweaked, ann) != base
+    assert dataset_key(tweaked, ann, hashes) != base
 
     tweaked2 = copy.deepcopy(cfg)
     tweaked2["patchclf"]["min_annot_frac"] = 0.10
-    assert dataset_key(tweaked2, ann) != base
+    assert dataset_key(tweaked2, ann, hashes) != base
 
-    assert dataset_key(cfg, {"b.bmp": entry()}) != base  # annotation content too
+    assert dataset_key(cfg, {"b.bmp": entry()}, hashes) != base  # annotation content
+    assert dataset_key(cfg, ann, ["h1", "h2", "h3"]) != base  # train split content (new incoming)
