@@ -34,6 +34,7 @@ from sklearn.metrics import classification_report, confusion_matrix, roc_auc_sco
 
 from coilvision.anomaly import PatchExtractor, anomaly_cfg
 from coilvision.config import load_config, resolve_path
+from coilvision.data.preprocess import preprocess_fingerprint
 from coilvision.train.datamodule import load_split_frame
 from coilvision.train.patchclf import score_images
 
@@ -42,6 +43,8 @@ CLASS_ORDER = ["Pass", "Dent", "Loose"]
 
 def select_threshold(scores: np.ndarray, is_fail: np.ndarray, target: float) -> dict:
     """Highest threshold with fail-recall >= target == lowest FRR at target recall."""
+    if not is_fail.any():
+        raise ValueError("no defect images in the threshold-selection split")
     best = None
     for thr in np.sort(np.unique(scores[is_fail])):
         recall = float((scores[is_fail] >= thr).mean())
@@ -51,6 +54,8 @@ def select_threshold(scores: np.ndarray, is_fail: np.ndarray, target: float) -> 
                 "fail_recall": recall,
                 "false_reject_rate": float((scores[~is_fail] >= thr).mean()),
             }
+    if best is None:
+        raise ValueError(f"no threshold achieves fail-recall >= {target}")
     return best
 
 
@@ -180,7 +185,8 @@ def main() -> None:
     t0 = time.time()
     base_cfg = load_config()
     cfg = anomaly_cfg(base_cfg)
-    target = base_cfg["eval"]["fail_recall_target"]
+    gate_target = base_cfg["eval"]["fail_recall_target"]
+    policy_target = base_cfg["eval"]["production_recall_target"]
     top_k = base_cfg["patchclf"]["top_k"]
     out_dir = resolve_path(cfg, "artifacts_dir") / "runs" / time.strftime("eval_%Y%m%d_%H%M%S")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -189,7 +195,14 @@ def main() -> None:
     if not heads:
         raise FileNotFoundError("no trained patchclf head found — run coilvision.train.patchclf first")
     head_path = heads[-1]
-    head = joblib.load(head_path)["head"]
+    bundle = joblib.load(head_path)
+    current_fp = preprocess_fingerprint(cfg)
+    if bundle.get("preprocess_fingerprint") != current_fp:
+        raise RuntimeError(
+            f"preprocess-version mismatch: head {head_path} was trained under fingerprint "
+            f"{bundle.get('preprocess_fingerprint')} but current config produces {current_fp}"
+        )
+    head = bundle["head"]
     print(f"head: {head_path}")
 
     extractor = PatchExtractor(cfg)
@@ -204,9 +217,11 @@ def main() -> None:
         frames[split] = frame
         all_maps[split] = maps
 
+    # operating point = the PRODUCTION policy (val-recall >= production_recall_target),
+    # so this report and the promotion gate measure at the threshold production actually runs
     op = select_threshold(frames["val"]["score"].to_numpy(),
-                          (frames["val"]["class"] != "Pass").to_numpy(), target)
-    print(f"\noperating point from VAL: thr={op['threshold']:.4f} "
+                          (frames["val"]["class"] != "Pass").to_numpy(), policy_target)
+    print(f"\noperating point from VAL (policy: recall>={policy_target}): thr={op['threshold']:.4f} "
           f"recall={op['fail_recall']:.3f} frr={op['false_reject_rate']:.3f}")
 
     for split in ("val", "test"):
@@ -217,7 +232,7 @@ def main() -> None:
     both = pd.concat([frames["val"], frames["test"]])
     runs = per_run_table(both, op["threshold"])
     runs.to_csv(out_dir / "per_run.csv", index=False)
-    plot_curves(frames["val"], frames["test"], op, target, out_dir / "curve.png")
+    plot_curves(frames["val"], frames["test"], op, gate_target, out_dir / "curve.png")
     plot_confusion(metrics["test"]["confusion"], out_dir / "confusion_test.png")
     write_gallery(frames["test"], all_maps["test"], cfg, out_dir / "gallery.html")
     both[["relpath", "class", "run", "split", "score", "vote", "predicted"]].to_csv(
@@ -225,9 +240,12 @@ def main() -> None:
 
     result = {
         "head": str(head_path),
+        "preprocess_fingerprint": current_fp,
         "top_k": top_k,
         "operating_point_val": op,
-        "recall_target": target,
+        "threshold_policy_recall_target": policy_target,
+        "gate_recall_target": gate_target,
+        "gate_met": metrics["test"]["fail_recall"] >= gate_target,
         "accepted_frr": base_cfg["eval"].get("accepted_frr"),
         "metrics": metrics,
         "wall_time_min": round((time.time() - t0) / 60, 1),

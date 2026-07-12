@@ -127,8 +127,11 @@ patchclf:
   seed: 42
 
 eval:
-  fail_recall_target: 0.95              # primary gate metric; macro-F1 tiebreak
-  accepted_frr: 0.084                   # user-accepted false-reject rate (2026-07-12, val operating point)
+  fail_recall_target: 0.95              # the GATE: measured on frozen test at the production threshold
+  # Production threshold policy (Option B, user 2026-07-12): highest val
+  # threshold with val fail-recall >= this. Used by report.py and promote.py.
+  production_recall_target: 1.0
+  accepted_frr: 0.133                   # user-accepted false-reject rate (Option B, 2026-07-12)
 
 gate:
   # promote iff candidate fail-recall >= production AND candidate macro-F1 > production

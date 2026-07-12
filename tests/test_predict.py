@@ -59,3 +59,29 @@ def test_real_production_pointer_is_consistent():
     assert 0 < pointer["threshold"] < 1
     assert pointer["aggregation"] == f"top{CFG['patchclf']['top_k']}"
     assert (PROD / "head.joblib").exists()
+
+
+@pytest.mark.skipif(not (PROD / "POINTER.json").exists(), reason="no production model promoted")
+def test_predict_folder_end_to_end(tmp_path):
+    import cv2
+    import numpy as np
+
+    from coilvision.predict.cli import predict_folder
+
+    w, h = CFG["data"]["expected_width"], CFG["data"]["expected_height"]
+    cv2.imwrite(str(tmp_path / "250825_152739_A35W_2-1 [1024].bmp"), np.full((h, w, 3), 60, np.uint8))
+    (tmp_path / "corrupt.bmp").write_bytes(b"junk")
+    cv2.imwrite(str(tmp_path / "small.bmp"), np.zeros((480, 640, 3), np.uint8))
+
+    df = predict_folder(tmp_path, CFG, PROD).set_index("file")
+
+    assert df.loc["corrupt.bmp", "verdict"] == "ERROR"
+    assert df.loc["corrupt.bmp", "issue"] == "unreadable"
+    assert df.loc["small.bmp", "verdict"] == "ERROR"
+    assert df.loc["small.bmp", "issue"] == "unexpected_dims_640x480"
+    good = df.loc["250825_152739_A35W_2-1 [1024].bmp"]
+    assert good["verdict"] in ("PASS", "FAIL")
+    assert 0 <= good["fail_score"] <= 1
+    assert good["run"] == "250825_152739" and good["part"] == 2  # provenance parsed
+    assert set(df.columns) >= {"verdict", "predicted_class", "fail_score", "dent_share",
+                               "loose_share", "roi_confident", "issue"}

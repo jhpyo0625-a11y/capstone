@@ -69,6 +69,13 @@ def predict_folder(folder: Path, cfg: dict, model_dir: Path, overlays_dir: Path 
             rows.append({**row, "verdict": "ERROR", "predicted_class": "", "fail_score": np.nan,
                          "dent_share": np.nan, "loose_share": np.nan, "roi_confident": "", "issue": "unreadable"})
             continue
+        h, w = img.shape[:2]
+        if (w, h) != (cfg["data"]["expected_width"], cfg["data"]["expected_height"]):
+            # wrong-format input would get a confident verdict on garbage — refuse per image
+            rows.append({**row, "verdict": "ERROR", "predicted_class": "", "fail_score": np.nan,
+                         "dent_share": np.nan, "loose_share": np.nan, "roi_confident": "",
+                         "issue": f"unexpected_dims_{w}x{h}"})
+            continue
         processed, meta = preprocess_image(img, cfg)
         s = score_processed(extractor, head, processed, top_k)
         verdict = "FAIL" if s["score"] >= threshold else "PASS"
@@ -89,7 +96,10 @@ def predict_folder(folder: Path, cfg: dict, model_dir: Path, overlays_dir: Path 
             overlay = cv2.addWeighted(processed, 0.6, heat, 0.4, 0)
             cv2.putText(overlay, f"{verdict} {s['score']:.3f}", (8, 24),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
-            cv2.imwrite(str(overlays_dir / f"{path.stem}_overlay.jpg"), overlay)
+            # flatten the relative path into the name so same-stem files in
+            # different subfolders can't overwrite each other's overlays
+            safe = str(path.relative_to(folder).with_suffix("")).replace("\\", "_").replace("/", "_")
+            cv2.imwrite(str(overlays_dir / f"{safe}_overlay.jpg"), overlay)
         if n % 20 == 0:
             print(f"  {n}/{len(files)}")
     return pd.DataFrame(rows)

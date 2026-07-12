@@ -36,6 +36,17 @@ def promote(head_path: Path, threshold_info: dict, why: str, cfg: dict) -> Path:
         )
     prod = resolve_path(cfg, "production_dir")
     prod.mkdir(parents=True, exist_ok=True)
+    # spec §6.6: promote swaps production, PREVIOUS KEPT — archive before overwrite
+    old_pointer = prod / "POINTER.json"
+    if old_pointer.exists():
+        old = json.loads(old_pointer.read_text(encoding="utf-8"))
+        stamp = old.get("promoted_at", "unknown").replace(":", "").replace(" ", "_")
+        archive = resolve_path(cfg, "models_dir") / "archive" / stamp
+        archive.mkdir(parents=True, exist_ok=True)
+        for name in ("head.joblib", "POINTER.json"):
+            if (prod / name).exists():
+                shutil.move(str(prod / name), str(archive / name))
+        print(f"previous production archived -> {archive}")
     shutil.copy2(head_path, prod / "head.joblib")
     pointer = {
         "source_head": str(head_path),
@@ -61,15 +72,17 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--head", required=True, help="path to head.joblib of the candidate")
     ap.add_argument("--from-val", required=True, help="val_scores.csv of the same run (threshold source)")
-    ap.add_argument("--recall-target", type=float, default=1.0)
+    ap.add_argument("--recall-target", type=float, default=None,
+                    help="default: eval.production_recall_target from config")
     ap.add_argument("--why", required=True)
     args = ap.parse_args()
 
     cfg = anomaly_cfg(load_config())
+    target = args.recall_target if args.recall_target is not None else cfg["eval"]["production_recall_target"]
     val = pd.read_csv(args.from_val, keep_default_na=False)
     col = f"score_top{cfg['patchclf']['top_k']}"
-    op = select_threshold(val[col].to_numpy(), (val["class"] != "Pass").to_numpy(), args.recall_target)
-    op["policy"] = f"val fail-recall >= {args.recall_target} on {col}"
+    op = select_threshold(val[col].to_numpy(), (val["class"] != "Pass").to_numpy(), target)
+    op["policy"] = f"val fail-recall >= {target} on {col}"
     promote(Path(args.head), op, args.why, cfg)
 
 
