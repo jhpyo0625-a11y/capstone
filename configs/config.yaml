@@ -120,12 +120,18 @@ patchclf:
   # user-annotated defect cells, negatives = winding cells from train Pass only.
   min_annot_frac: 0.05                  # grid cell is positive if >=5% annotated
   negatives_per_image: 150
+  hard_negative_rounds: 1               # mine hottest train-Pass patches, refit (train only)
+  hard_negatives_per_image: 40
   C: 1.0                                # logistic regression inverse regularization
-  top_k: 10                             # image score = mean of top-k P(fail) patches
+  top_k: 20                             # image score = mean of top-k P(fail) patches (top20 best on val)
   seed: 42
 
 eval:
-  fail_recall_target: 0.95              # primary gate metric; macro-F1 tiebreak
+  fail_recall_target: 0.95              # the GATE: measured on frozen test at the production threshold
+  # Production threshold policy (Option B, user 2026-07-12): highest val
+  # threshold with val fail-recall >= this. Used by report.py and promote.py.
+  production_recall_target: 1.0
+  accepted_frr: 0.133                   # user-accepted false-reject rate (Option B, 2026-07-12)
 
 gate:
   # promote iff candidate fail-recall >= production AND candidate macro-F1 > production

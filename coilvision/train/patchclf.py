@@ -48,14 +48,64 @@ def _features_for(extractor: PatchExtractor, cache_dir: Path, cache_file: str) -
     return extractor(_load_batch([cache_file], cache_dir))[0].numpy()
 
 
+def score_processed(extractor: PatchExtractor, head, img_bgr: np.ndarray, top_k: int) -> dict:
+    """Score ONE preprocessed (cache-format) BGR image.
+
+    The single scoring code path shared by training-time evaluation and the
+    predict CLI (spec §6.5: identical preprocessing/scoring in train and serve).
+    Returns fail score (top-k mean of P(fail) over winding patches), the
+    Dent-vs-Loose vote among the hottest patches, and the P(fail) grid.
+    """
+    import torch
+
+    from coilvision.train.datamodule import IMAGENET_MEAN, IMAGENET_STD
+
+    rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    x = ((rgb - IMAGENET_MEAN) / IMAGENET_STD).transpose(2, 0, 1)[None]
+    feats = extractor(torch.from_numpy(np.ascontiguousarray(x)))[0].numpy()
+    probs = head.predict_proba(feats)
+    pfail = (probs[:, 1] + probs[:, 2]).reshape(extractor.grid)
+    wmask = winding_mask(img_bgr, extractor.grid)
+    vals = np.sort(pfail[wmask])
+    kk = min(top_k, len(vals))
+    score = float(vals[-kk:].mean())
+    flat_idx = np.argsort(pfail[wmask])[-kk:]
+    top_probs = probs[np.flatnonzero(wmask.flatten())][flat_idx]
+    dent, loose = float(top_probs[:, 1].sum()), float(top_probs[:, 2].sum())
+    return {
+        "score": score,
+        "vote": "Dent" if dent >= loose else "Loose",
+        "dent_share": round(dent / max(dent + loose, 1e-9), 4),
+        "loose_share": round(loose / max(dent + loose, 1e-9), 4),
+        "pfail_map": np.where(wmask, pfail, 0.0),
+        "winding_vals": vals,  # sorted P(fail) over winding patches, for aggregation variants
+    }
+
+
+def dataset_key(cfg: dict, ann: dict) -> str:
+    """Cache key for the patch dataset: annotation content + preprocess
+    fingerprint + the sampling params that shape the dataset. Any of these
+    changing must invalidate the cached npz (mining params excluded — mining
+    runs after this cache)."""
+    p = cfg["patchclf"]
+    blob = json.dumps(
+        {
+            "ann": ann,
+            "min_annot_frac": p["min_annot_frac"],
+            "negatives_per_image": p["negatives_per_image"],
+            "seed": p["seed"],
+        },
+        sort_keys=True,
+    ).encode()
+    return hashlib.blake2b(blob + preprocess_fingerprint(cfg).encode(), digest_size=6).hexdigest()
+
+
 def build_patch_dataset(cfg: dict, extractor: PatchExtractor, ann: dict) -> tuple[np.ndarray, np.ndarray]:
-    """(X, y) patch features/labels from the train split. Cached to disk keyed by
-    preprocess fingerprint + annotation content."""
+    """(X, y) patch features/labels from the train split. Cached to disk keyed
+    by dataset_key (annotations + preprocess fingerprint + sampling params)."""
     p = cfg["patchclf"]
     cache_dir = resolve_path(cfg, "cache_dir")
-    ann_blob = json.dumps(ann, sort_keys=True).encode()
-    key = hashlib.blake2b(ann_blob + preprocess_fingerprint(cfg).encode(), digest_size=6).hexdigest()
-    npz_path = cache_dir / f"patch_dataset_{key}.npz"
+    npz_path = cache_dir / f"patch_dataset_{dataset_key(cfg, ann)}.npz"
     if npz_path.exists():
         d = np.load(npz_path)
         print(f"patch dataset loaded from cache: X={d['X'].shape}")
@@ -71,6 +121,8 @@ def build_patch_dataset(cfg: dict, extractor: PatchExtractor, ann: dict) -> tupl
         if entry is None or (not entry["strokes"] and not entry["boxes"]):
             continue
         img = cv2.imread(str(cache_dir / r["cache_file"]))
+        if img is None:
+            raise FileNotFoundError(f"cache image missing or unreadable: {cache_dir / r['cache_file']}")
         feats = _features_for(extractor, cache_dir, r["cache_file"])
         gmask = mask_to_grid(defect_mask(entry, img.shape[1], img.shape[0]), extractor.grid, p["min_annot_frac"])
         cells = feats[gmask.flatten()]
@@ -82,6 +134,8 @@ def build_patch_dataset(cfg: dict, extractor: PatchExtractor, ann: dict) -> tupl
     passes = train[train["class"] == "Pass"]
     for n, (_, r) in enumerate(passes.iterrows(), 1):
         img = cv2.imread(str(cache_dir / r["cache_file"]))
+        if img is None:
+            raise FileNotFoundError(f"cache image missing or unreadable: {cache_dir / r['cache_file']}")
         feats = _features_for(extractor, cache_dir, r["cache_file"])
         wmask = winding_mask(img, extractor.grid).flatten()
         idx = np.flatnonzero(wmask)
@@ -104,22 +158,26 @@ def score_images(cfg: dict, extractor: PatchExtractor, head, frame: pd.DataFrame
     cache_dir = resolve_path(cfg, "cache_dir")
     ks = (1, 5, 10, 20)
     scores = {f"top{k}": [] for k in ks}
+    scores.update({"mean": [], "hotfrac": [], "logodds_top20": []})
     dent_vs_loose, maps = [], []
     for n, (_, r) in enumerate(frame.iterrows(), 1):
         img = cv2.imread(str(cache_dir / r["cache_file"]))
-        feats = _features_for(extractor, cache_dir, r["cache_file"])
-        probs = head.predict_proba(feats)
-        pfail = (probs[:, 1] + probs[:, 2]).reshape(extractor.grid)
-        wmask = winding_mask(img, extractor.grid)
-        vals = np.sort(pfail[wmask])
+        if img is None:
+            raise FileNotFoundError(f"cache image missing or unreadable: {cache_dir / r['cache_file']}")
+        # score_processed is THE scoring path (shared with the predict CLI);
+        # everything here derives from its outputs so eval and serving can't diverge
+        s = score_processed(extractor, head, img, p["top_k"])
+        vals = s["winding_vals"]
         for k in ks:
             kk = min(k, len(vals))
             scores[f"top{k}"].append(float(vals[-kk:].mean()))
-        # among the hottest fail patches, which defect class dominates?
-        flat_idx = np.argsort(pfail[wmask])[-min(p["top_k"], wmask.sum()):]
-        top_probs = probs[np.flatnonzero(wmask.flatten())][flat_idx]
-        dent_vs_loose.append("Dent" if top_probs[:, 1].sum() >= top_probs[:, 2].sum() else "Loose")
-        maps.append(np.where(wmask, pfail, 0.0))
+        # breadth-aware variants: falsified on val 2026-07-12 (kept for monitoring)
+        scores["mean"].append(float(vals.mean()))
+        scores["hotfrac"].append(float((vals > 0.5).mean()))
+        top = np.clip(vals[-min(20, len(vals)):], 1e-6, 1 - 1e-6)
+        scores["logodds_top20"].append(float(np.log(top / (1 - top)).mean()))
+        dent_vs_loose.append(s["vote"])
+        maps.append(s["pfail_map"])
         if n % 50 == 0:
             print(f"  scored {n}/{len(frame)}")
     return {k: np.array(v) for k, v in scores.items()}, dent_vs_loose, maps
@@ -137,13 +195,37 @@ def main() -> None:
 
     ann = load_annotations(resolve_path(cfg, "artifacts_dir") / "annotation" / "annotations_train.json")
     extractor = PatchExtractor(cfg)
-    # prime extractor.grid with one image so mask_to_grid has dimensions
-    first = load_split_frame("train", cfg).iloc[0]
-    _features_for(extractor, resolve_path(cfg, "cache_dir"), first["cache_file"])
-
     X, y = build_patch_dataset(cfg, extractor, ann)
     head = LogisticRegression(max_iter=3000, C=p["C"], class_weight="balanced")
     head.fit(X, y)
+    assert list(head.classes_) == [0, 1, 2], f"head classes misaligned: {head.classes_}"  # P(fail)=cols 1+2
+
+    # Hard-negative mining (train split only): the first head saturates on rare
+    # benign winding textures it never sampled — mine the hottest Pass patches
+    # and refit so "unusual but fine" stops looking like a defect.
+    for rnd in range(p.get("hard_negative_rounds", 0)):
+        cache_dir = resolve_path(cfg, "cache_dir")
+        passes = load_split_frame("train", cfg)
+        passes = passes[passes["class"] == "Pass"]
+        hard = []
+        for n, (_, r) in enumerate(passes.iterrows(), 1):
+            img = cv2.imread(str(cache_dir / r["cache_file"]))
+            if img is None:
+                raise FileNotFoundError(f"cache image missing or unreadable: {cache_dir / r['cache_file']}")
+            feats = _features_for(extractor, cache_dir, r["cache_file"])
+            pfail = head.predict_proba(feats)[:, 1:].sum(axis=1)
+            wmask = winding_mask(img, extractor.grid).flatten()
+            idx = np.flatnonzero(wmask)
+            take = idx[np.argsort(pfail[idx])[-p["hard_negatives_per_image"]:]]
+            hard.append(feats[take])
+            if n % 100 == 0:
+                print(f"  mining round {rnd + 1}: {n}/{len(passes)}")
+        X = np.concatenate([X, np.concatenate(hard).astype(np.float32)])
+        y = np.concatenate([y, np.zeros(sum(len(h) for h in hard), dtype=int)])
+        head = LogisticRegression(max_iter=3000, C=p["C"], class_weight="balanced")
+        head.fit(X, y)
+        print(f"  round {rnd + 1}: +{sum(len(h) for h in hard)} hard negatives, labels {np.bincount(y).tolist()}")
+
     train_patch_auc = roc_auc_score(y > 0, head.predict_proba(X)[:, 1:].sum(axis=1))
     print(f"patch-level TRAIN AUC (fit sanity): {train_patch_auc:.4f}")
 

@@ -61,3 +61,26 @@ def test_load_annotations_roundtrip(tmp_path):
     p.write_text(json.dumps(data), encoding="utf-8")
     ann = load_annotations(p)
     assert "x.bmp" in ann and ann["x.bmp"]["strokes"][0]["r"] == 0.01
+
+
+def test_patch_dataset_key_sensitive_to_sampling_params():
+    import copy
+
+    from coilvision.anomaly import anomaly_cfg
+    from coilvision.config import load_config
+    from coilvision.train.patchclf import dataset_key
+
+    cfg = anomaly_cfg(load_config())
+    ann = {"a.bmp": entry()}
+    base = dataset_key(cfg, ann)
+    assert dataset_key(cfg, ann) == base  # deterministic
+
+    tweaked = copy.deepcopy(cfg)
+    tweaked["patchclf"]["negatives_per_image"] += 1
+    assert dataset_key(tweaked, ann) != base
+
+    tweaked2 = copy.deepcopy(cfg)
+    tweaked2["patchclf"]["min_annot_frac"] = 0.10
+    assert dataset_key(tweaked2, ann) != base
+
+    assert dataset_key(cfg, {"b.bmp": entry()}) != base  # annotation content too
