@@ -71,6 +71,7 @@ class CoilDataset(Dataset):
         self.frame = frame.reset_index(drop=True)
         self.train = train
         self.aug = cfg["train"]["augment"]
+        self.normalize = cfg["train"].get("normalize", "imagenet")
         self.rng = np.random.default_rng(seed)
         self.images: list[np.ndarray] = []
         for f in self.frame["cache_file"]:
@@ -87,7 +88,12 @@ class CoilDataset(Dataset):
         img = self.images[i]
         if self.train:
             img = augment(img, self.rng, self.aug)
-        x = (img.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
+        if self.normalize == "per_image":
+            # channels joint: hue relationships preserved, per-session exposure removed
+            f = img.astype(np.float32)
+            x = (f - f.mean()) / (f.std() + 1e-6)
+        else:
+            x = (img.astype(np.float32) / 255.0 - IMAGENET_MEAN) / IMAGENET_STD
         return torch.from_numpy(np.ascontiguousarray(x.transpose(2, 0, 1))), int(self.labels[i])
 
 

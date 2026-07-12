@@ -79,6 +79,8 @@ Source: `Coil-image-Dataset/` — 817 BMP images, all **2448×2048, 24-bit RGB**
 | Serving | **CLI batch tool**: `predict <folder>` → CSV report + Grad-CAM overlays |
 | Promotion | **Auto-promote with gate**: new model replaces production only if it beats it on frozen test (fail-recall must not degrade); all runs archived as versioned JSON + plots |
 | Label conflicts | **Resolved 2026-07-11** — not conflicts; folder labels confirmed correct (see §2). Training data unfrozen |
+| Model selection metric | **val fail-AUC, macro-F1 tiebreak** (2026-07-12): early-stopping on fail-recall selected the degenerate all-fail predictor (recall 1.0 @ FRR 0.98, run `20260711_231842`); AUC is threshold-free, operating threshold tuned in Phase 4 |
+| Input representation | **768×288 rectangular letterbox + per-image normalization** (2026-07-12): the original 384² square downscaled the winding pitch to ~1.2px — below Nyquist, defect texture aliased away — and ImageNet normalization left per-session exposure shortcuts; observed as val fail-AUC *below* 0.5 while train loss fell (runs `231842`, `234510`) |
 | Filename semantics | **Filenames are provenance only** (2026-07-11): `part#`/`shot#` do not identify a physical part; never use filename fields to infer labels or identity. The classifier decides Pass/Dent/Loose from image content alone |
 
 ---
@@ -169,8 +171,9 @@ MyProject1/
    winding band → bbox padded ~15%. Sanity checks (peak centrality, area, aspect,
    width fraction) gate confidence; fallback = fixed central crop (5–95% W,
    20–72% H), flagged in the cache index.
-5. **Resize** to 384×384 (letterboxed), cache as PNG in `artifacts/cache/`
-   keyed by file hash + preprocess version.
+5. **Resize** to 768×288 (letterboxed, rectangular — see decisions log
+   2026-07-12), cache as PNG in `artifacts/cache/` keyed by file hash +
+   preprocess-config fingerprint (any parameter change invalidates the cache).
 6. **EDA report** (once, and refreshed on retrain): class/run/shot/code
    distributions, brightness histograms per code value, layout cluster counts,
    duplicate detection (perceptual hash).
@@ -187,9 +190,10 @@ MyProject1/
 ### 6.3 Training (Phase 3)
 
 - Backbone: **EfficientNet-B0** via `timm`, ImageNet weights (fallback candidate: `convnext_tiny`).
-- Input 384². Two-stage fine-tune: (1) head only, lr 3e-3, 3 epochs; (2) full
-  network, lr 1e-4, cosine decay, up to 30 epochs, early stop on val fail-recall
-  (patience 5).
+- Input **768×288** (rectangular letterbox matched to coil aspect; see decisions
+  log 2026-07-12), per-image normalization. Two-stage fine-tune: (1) head only,
+  lr 3e-3, 3 epochs; (2) full network, lr 1e-4, cosine decay, up to 30 epochs,
+  early stop on val **fail-AUC** (macro-F1 tiebreak), patience 5.
 - Loss: class-weighted cross-entropy (weights ∝ inverse class frequency, from train split only).
 - Augmentation (train only): h/v flip, rotation ±5°, brightness/contrast ±15%,
   slight random-resized-crop (0.9–1.0). No hue shifts (copper color is signal).

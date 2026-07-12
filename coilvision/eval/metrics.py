@@ -11,7 +11,7 @@ An image is predicted "fail" when P(fail) = sum of defect probs >= threshold.
 from __future__ import annotations
 
 import numpy as np
-from sklearn.metrics import f1_score
+from sklearn.metrics import f1_score, roc_auc_score
 
 
 def fail_scores(probs: np.ndarray, fail_indices: list[int]) -> np.ndarray:
@@ -34,6 +34,19 @@ def false_reject_rate(y_true: np.ndarray, probs: np.ndarray, fail_indices: list[
         return float("nan")
     predicted_fail = fail_scores(probs, fail_indices) >= threshold
     return float(predicted_fail[is_pass].mean())
+
+
+def fail_auc(y_true: np.ndarray, probs: np.ndarray, fail_indices: list[int]) -> float:
+    """ROC-AUC of the fail score for pass-vs-fail — threshold-free separability.
+
+    This is the model-selection signal: fail-recall alone is gamed by the
+    degenerate all-fail predictor (recall 1.0 at false-reject 1.0), while AUC
+    rewards actually ranking defects above passes at ANY threshold.
+    """
+    is_fail = np.isin(y_true, fail_indices)
+    if is_fail.all() or not is_fail.any():
+        return float("nan")
+    return float(roc_auc_score(is_fail, fail_scores(probs, fail_indices)))
 
 
 def macro_f1(y_true: np.ndarray, y_pred: np.ndarray) -> float:

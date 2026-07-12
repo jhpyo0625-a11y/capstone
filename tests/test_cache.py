@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 from coilvision.config import load_config, resolve_path
-from coilvision.data.preprocess import build_cache, cache_path_for, preprocess_fingerprint
+from coilvision.data.preprocess import build_cache, cache_index_path, cache_path_for, preprocess_fingerprint
 
 CFG = load_config()
 
@@ -87,7 +87,7 @@ def test_config_change_invalidates_cache(tmp_path):
 
 
 MANIFEST_PATH = resolve_path(CFG, "manifests_dir") / "manifest.csv"
-INDEX_PATH = resolve_path(CFG, "manifests_dir") / f"cache_index_v{CFG['preprocess']['version']}.csv"
+INDEX_PATH = cache_index_path(CFG)
 
 
 @pytest.mark.skipif(not (MANIFEST_PATH.exists() and INDEX_PATH.exists()), reason="cache not built yet")
@@ -99,5 +99,6 @@ def test_real_cache_consistent_with_manifest():
     missing = [f for f in index["cache_file"] if not (cache_dir / f).exists()]
     assert not missing, f"{len(missing)} index rows point at missing PNGs"
     size = CFG["preprocess"]["resize"]
+    tw, th = (size, size) if isinstance(size, int) else (size[0], size[1])
     sample = cv2.imread(str(cache_dir / index.iloc[0]["cache_file"]))
-    assert sample.shape == (size, size, 3)
+    assert sample.shape == (th, tw, 3)

@@ -31,12 +31,17 @@ from torch import nn
 
 from coilvision.config import load_config, resolve_path
 from coilvision.data.preprocess import preprocess_fingerprint
-from coilvision.eval.metrics import fail_recall, false_reject_rate, macro_f1
+from coilvision.eval.metrics import fail_auc, fail_recall, false_reject_rate, macro_f1
 from coilvision.train.datamodule import make_loaders
 
 
 class EarlyStopper:
-    """Tracks the best (fail_recall, macro_f1) tuple; stops after `patience` non-improving epochs."""
+    """Tracks the best (fail_auc, macro_f1) tuple; stops after `patience` non-improving epochs.
+
+    NOT fail-recall: selecting on recall alone picks the degenerate all-fail
+    predictor (recall 1.0 at false-reject 1.0 — observed on run 20260711_231842).
+    AUC is threshold-free; the operating threshold is tuned later (Phase 4).
+    """
 
     def __init__(self, patience: int):
         self.patience = patience
@@ -73,6 +78,7 @@ def evaluate(model: nn.Module, loader, fail_indices: list[int]) -> dict:
     y_true = np.concatenate(all_y)
     y_pred = probs.argmax(axis=1)
     return {
+        "fail_auc": fail_auc(y_true, probs, fail_indices),
         "fail_recall": fail_recall(y_true, probs, fail_indices),
         "macro_f1": macro_f1(y_true, y_pred),
         "false_reject_rate": false_reject_rate(y_true, probs, fail_indices),
@@ -121,7 +127,7 @@ def train_run(cfg: dict, smoke: bool = False) -> str:
         loss = train_one_epoch(model, train_loader, criterion, opt)
         m = evaluate(model, val_loader, fail_indices)
         history.append({"stage": 1, "epoch": epoch, "train_loss": round(loss, 4), **{k: round(v, 4) for k, v in m.items()}})
-        print(f"  s1 e{epoch}: loss={loss:.4f} val_fail_recall={m['fail_recall']:.3f} macro_f1={m['macro_f1']:.3f}")
+        print(f"  s1 e{epoch}: loss={loss:.4f} val_fail_auc={m['fail_auc']:.3f} macro_f1={m['macro_f1']:.3f}")
 
     # Stage 2: full network, cosine decay, early stopping
     for p in model.parameters():
@@ -136,11 +142,12 @@ def train_run(cfg: dict, smoke: bool = False) -> str:
         sched.step()
         m = evaluate(model, val_loader, fail_indices)
         history.append({"stage": 2, "epoch": epoch, "train_loss": round(loss, 4), **{k: round(v, 4) for k, v in m.items()}})
-        improved = stopper.update((m["fail_recall"], m["macro_f1"]), epoch)
+        improved = stopper.update((m["fail_auc"], m["macro_f1"]), epoch)
         if improved:
             best_state, best_metrics = copy.deepcopy(model.state_dict()), m
-        print(f"  s2 e{epoch}: loss={loss:.4f} val_fail_recall={m['fail_recall']:.3f} "
-              f"macro_f1={m['macro_f1']:.3f} frr={m['false_reject_rate']:.3f}{' *best*' if improved else ''}")
+        print(f"  s2 e{epoch}: loss={loss:.4f} val_fail_auc={m['fail_auc']:.3f} "
+              f"macro_f1={m['macro_f1']:.3f} recall={m['fail_recall']:.3f} "
+              f"frr={m['false_reject_rate']:.3f}{' *best*' if improved else ''}")
         if stopper.should_stop:
             print(f"  early stop at epoch {epoch} (best epoch {stopper.best_epoch})")
             break
@@ -156,7 +163,8 @@ def train_run(cfg: dict, smoke: bool = False) -> str:
             "state_dict": best_state,
             "backbone": tc["backbone"],
             "classes": classes,
-            "input_size": tc["input_size"],
+            "input_size": list(cfg["preprocess"]["resize"]) if not isinstance(cfg["preprocess"]["resize"], int) else cfg["preprocess"]["resize"],
+            "normalize": tc.get("normalize", "imagenet"),
             "preprocess_version": cfg["preprocess"]["version"],
             "preprocess_fingerprint": preprocess_fingerprint(cfg),
             "run_id": run_id,
