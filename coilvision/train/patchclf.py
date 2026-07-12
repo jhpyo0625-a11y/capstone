@@ -48,6 +48,39 @@ def _features_for(extractor: PatchExtractor, cache_dir: Path, cache_file: str) -
     return extractor(_load_batch([cache_file], cache_dir))[0].numpy()
 
 
+def score_processed(extractor: PatchExtractor, head, img_bgr: np.ndarray, top_k: int) -> dict:
+    """Score ONE preprocessed (cache-format) BGR image.
+
+    The single scoring code path shared by training-time evaluation and the
+    predict CLI (spec §6.5: identical preprocessing/scoring in train and serve).
+    Returns fail score (top-k mean of P(fail) over winding patches), the
+    Dent-vs-Loose vote among the hottest patches, and the P(fail) grid.
+    """
+    import torch
+
+    from coilvision.train.datamodule import IMAGENET_MEAN, IMAGENET_STD
+
+    rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
+    x = ((rgb - IMAGENET_MEAN) / IMAGENET_STD).transpose(2, 0, 1)[None]
+    feats = extractor(torch.from_numpy(np.ascontiguousarray(x)))[0].numpy()
+    probs = head.predict_proba(feats)
+    pfail = (probs[:, 1] + probs[:, 2]).reshape(extractor.grid)
+    wmask = winding_mask(img_bgr, extractor.grid)
+    vals = np.sort(pfail[wmask])
+    kk = min(top_k, len(vals))
+    score = float(vals[-kk:].mean())
+    flat_idx = np.argsort(pfail[wmask])[-kk:]
+    top_probs = probs[np.flatnonzero(wmask.flatten())][flat_idx]
+    dent, loose = float(top_probs[:, 1].sum()), float(top_probs[:, 2].sum())
+    return {
+        "score": score,
+        "vote": "Dent" if dent >= loose else "Loose",
+        "dent_share": round(dent / max(dent + loose, 1e-9), 4),
+        "loose_share": round(loose / max(dent + loose, 1e-9), 4),
+        "pfail_map": np.where(wmask, pfail, 0.0),
+    }
+
+
 def build_patch_dataset(cfg: dict, extractor: PatchExtractor, ann: dict) -> tuple[np.ndarray, np.ndarray]:
     """(X, y) patch features/labels from the train split. Cached to disk keyed by
     preprocess fingerprint + annotation content."""

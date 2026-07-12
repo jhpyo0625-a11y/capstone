@@ -81,6 +81,7 @@ Source: `Coil-image-Dataset/` — 817 BMP images, all **2448×2048, 24-bit RGB**
 | Label conflicts | **Resolved 2026-07-11** — not conflicts; folder labels confirmed correct (see §2). Training data unfrozen |
 | Model selection metric | **val fail-AUC, macro-F1 tiebreak** (2026-07-12): early-stopping on fail-recall selected the degenerate all-fail predictor (recall 1.0 @ FRR 0.98, run `20260711_231842`); AUC is threshold-free, operating threshold tuned in Phase 4 |
 | Input representation | **768×288 rectangular letterbox + per-image normalization** (2026-07-12): the original 384² square downscaled the winding pitch to ~1.2px — below Nyquist, defect texture aliased away — and ImageNet normalization left per-session exposure shortcuts; observed as val fail-AUC *below* 0.5 while train loss fell (runs `231842`, `234510`) |
+| Production operating point | **Option B, user-approved 2026-07-12**: threshold = highest val threshold with val fail-recall 1.0 → **0.9149** (top-20 aggregation). Measured on frozen test: recall 93.9% @ FRR 13.3% (~1 in 7.5 good parts flagged). Accepted FRR budget raised from 8.4% to ~13% |
 | **Architecture (amends "transfer-learning CNN")** | **Patch-supervised head on frozen features** (2026-07-12): user brush-annotated every defect image (852 strokes total, val+train); model = logistic head (normal/Dent/Loose) on frozen resnet50 patch features at 1536×576, image verdict = top-k P(fail) over winding patches. Rationale: defects span 1-2 wire pitches (~1-2% of pixels); image-level CNN memorized runs (val AUC ≤0.60); unsupervised PatchCore stalled at 0.73 (benign-unusual patches score like defects — hottest patch hit annotations only 8/30). **Val: image fail-AUC 0.983, recall 96.7% @ FRR 8.4%, dent/loose vote 90%.** End-to-end fine-tune of the image CNN (`train/trainer.py`) kept as reference baseline |
 | Filename semantics | **Filenames are provenance only** (2026-07-11): `part#`/`shot#` do not identify a physical part; never use filename fields to infer labels or identity. The classifier decides Pass/Dent/Loose from image content alone |
 
@@ -288,9 +289,12 @@ watcher (Task Scheduler, hourly count + weekly forced)
 - [x] Final test eval #2 (user-sanctioned, `eval_20260712_224029/`): fail-AUC **0.978**, recall 0.879 @ FRR 0.088 at the val threshold; strictest val policy transfers to **0.939 @ 0.133**; test-optimal shows the gate is reachable at ~14% FRR
 - *Acceptance: fail-recall ≥ 95% at an accepted false-reject rate — **gate not met at the 8.4% FRR budget; documented gap analysis + iteration plan delivered** (`GAP_ANALYSIS.md` in both eval run dirs). Root cause: threshold calibration across only 28 runs, not model ranking. Operating-point choice (recall-first at ~13% FRR vs 87.9% at 8.8%) is a user decision; long-term fix is more runs via the Phase 5-6 retraining pipeline.*
 
-**Phase 5 — Deployment (CLI)**
-- [ ] `coil-predict` CLI + CSV/rollup/overlays + version-pinned production loading
-- *Acceptance: user runs it on a fresh folder and the report is correct/readable.*
+**Phase 5 — Deployment (CLI)** *(built 2026-07-12)*
+- [x] `coil-predict <folder> [--out report.csv] [--overlays] [--model dir]` — per-image CSV (provenance + verdict + fail score + dent/loose shares + ROI flag), P(fail) overlays, unreadable files become ERROR rows
+- [x] Version-pinned production loading: refuses on preprocess-fingerprint mismatch (tested)
+- [x] `coilvision/pipeline/promote.py`: packages head + POINTER.json (threshold 0.9149 from the Option B val-recall-100% policy, aggregation, fingerprint, why); production model promoted
+- [x] Demo on a fresh mixed folder from test runs: 2 Dents flagged FAIL/Dent (0.99+), 3 Passes passed, corrupt file → ERROR row
+- *Acceptance: user runs it on a fresh folder and the report is correct/readable — **pending user's own run**.*
 
 **Phase 6 — Automated retraining**
 - [ ] Orchestrator (steps 1–8 above) + lock + reports
