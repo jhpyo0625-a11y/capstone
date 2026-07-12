@@ -56,14 +56,25 @@ def test_roi_falls_back_on_featureless_image():
 
 def test_letterbox_shape_and_content_centered():
     img = np.full((100, 400, 3), 200, dtype=np.uint8)
-    out = letterbox(img, 384)
+    out = letterbox(img, 384)  # square int form still supported
     assert out.shape == (384, 384, 3)
     assert out[192, 192].tolist() == [200, 200, 200]  # content at center
     assert out[10, 192].tolist() == [0, 0, 0]  # padding above
 
 
+def test_letterbox_rectangular_target():
+    img = np.full((550, 1900, 3), 200, dtype=np.uint8)  # coil-like aspect
+    out = letterbox(img, [768, 288])
+    assert out.shape == (288, 768, 3)
+    assert out[144, 384].tolist() == [200, 200, 200]
+    # aspect preserved: content spans full width, padded top/bottom
+    assert out[144, 2].tolist() == [200, 200, 200]
+    assert out[2, 384].tolist() == [0, 0, 0]
+
+
 def test_preprocess_image_output_is_model_ready_and_leak_free():
     out, meta = preprocess_image(synthetic_frame(), CFG)
-    assert out.shape == (P["resize"], P["resize"], 3)
+    tw, th = P["resize"] if not isinstance(P["resize"], int) else (P["resize"], P["resize"])
+    assert out.shape == (th, tw, 3)
     assert count_red_text_pixels(out, P["red_text"]) == 0
     assert meta["roi_confident"] is False  # featureless synthetic -> fallback

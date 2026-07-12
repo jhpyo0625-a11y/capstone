@@ -48,22 +48,80 @@ preprocess:
     max_width_frac: 0.80                # wider than this = grabbed the whole board strip
     pad_frac: 0.15
     fallback_crop: {x0: 0.05, x1: 0.95, y0: 0.20, y1: 0.72}
-  resize: 384
+  # [width, height] letterbox target. Rectangular, matched to the coil's ~2.7
+  # aspect (2026-07-12): squares at 384 downscaled the winding pitch to ~1.2px
+  # (below Nyquist) — defect texture was aliased away and the model learned
+  # session shortcuts instead (val fail-AUC dropped BELOW 0.5, runs 231842/234510).
+  resize: [768, 288]
 
 split:
   group_by: run                         # NEVER split per-image (spec §6.2)
-  val_frac: 0.20
-  test_manifest: artifacts/manifests/test_v1.csv
-  seed: 42
+  version: 1                            # test_v1 is frozen once approved; bumping = deliberate re-baseline
+  # Deterministic exhaustive search over run combinations — no RNG. A combo is
+  # feasible if it meets the min_* constraints, keeps every class fraction inside
+  # class_frac_window, and never exhausts a layout (train keeps >=1 run of each).
+  # Best combo = per-class image fractions closest to class_frac_target.
+  test:
+    n_runs: [6]
+    min_dent_runs: 2
+    min_loose_runs: 2
+    min_pass_images: 50
+    min_layouts: 2
+    class_frac_target: 0.18
+    class_frac_window: [0.10, 0.28]
+  val:                                  # fractions are of the pool remaining after test removal
+    n_runs: [4, 5, 6]
+    min_dent_runs: 1
+    min_loose_runs: 1
+    min_pass_images: 40
+    min_layouts: 1
+    class_frac_target: 0.20
+    class_frac_window: [0.10, 0.35]
 
 train:
   backbone: efficientnet_b0
   fallback_backbone: convnext_tiny
-  input_size: 384
   batch_size: 16
+  # per_image: (x - mean) / std over the whole image, channels joint (hue is
+  # preserved, per-session exposure is removed). imagenet = fixed RGB stats.
+  normalize: per_image
   stage1: {lr: 3.0e-3, epochs: 3}       # head only
   stage2: {lr: 1.0e-4, max_epochs: 30}  # full network, cosine decay
-  early_stop_patience: 5                # on val fail-recall
+  early_stop_patience: 5                # on val (fail-AUC, macro-F1) — threshold-free; recall alone is gamed by all-fail
+  seed: 42
+  augment:                              # train only; NO hue shifts (copper color is signal)
+    hflip_p: 0.5
+    vflip_p: 0.5
+    rotate_deg: 5
+    brightness: 0.15
+    contrast: 0.15
+    rrc_scale: [0.90, 1.00]             # slight random-resized-crop
+
+anomaly:
+  # PatchCore-style experiment (2026-07-12): NN patch-feature distance to a
+  # memory bank of train-split Pass images. No training loop. Scores are
+  # masked to winding patches (off-coil board patches score high on unfamiliar
+  # runs for the wrong reason — run anomaly_20260712_073206).
+  backbone: resnet50
+  out_indices: [2, 3]                   # stride-8 + stride-16 feature maps
+  # Own hi-res cache (coexists with the classifier cache via the config
+  # fingerprint): at 768 wide a stride-8 patch spans ~3.3 wire pitches — too
+  # coarse for one-wire deviations; at 1536 it spans ~1.6.
+  resize: [1536, 576]
+  proj_dim: 256                         # fixed-seed Gaussian random projection
+  patches_per_image: 400                # sampled into the bank per Pass image
+  bank_size: 30000
+  top_k: 10                             # image score = mean of top-k patch distances
+  batch_size: 2
+  seed: 42
+
+patchclf:
+  # Supervised patch head on frozen anomaly features (2026-07-12): positives =
+  # user-annotated defect cells, negatives = winding cells from train Pass only.
+  min_annot_frac: 0.05                  # grid cell is positive if >=5% annotated
+  negatives_per_image: 150
+  C: 1.0                                # logistic regression inverse regularization
+  top_k: 10                             # image score = mean of top-k P(fail) patches
   seed: 42
 
 eval:

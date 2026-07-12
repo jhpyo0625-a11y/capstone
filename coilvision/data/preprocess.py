@@ -94,13 +94,15 @@ def detect_roi(img: np.ndarray, roi_cfg: dict) -> tuple[tuple[int, int, int, int
     return (x0, y0, x1, y1), True
 
 
-def letterbox(img: np.ndarray, size: int) -> np.ndarray:
+def letterbox(img: np.ndarray, size: int | list[int] | tuple[int, int]) -> np.ndarray:
+    """Aspect-preserving resize into a (width, height) canvas, black-padded."""
+    tw, th = (size, size) if isinstance(size, int) else (size[0], size[1])
     h, w = img.shape[:2]
-    s = size / max(h, w)
+    s = min(tw / w, th / h)
     resized = cv2.resize(img, (max(1, int(round(w * s))), max(1, int(round(h * s)))), interpolation=cv2.INTER_AREA)
-    out = np.zeros((size, size, 3), dtype=img.dtype)
+    out = np.zeros((th, tw, 3), dtype=img.dtype)
     rh, rw = resized.shape[:2]
-    top, left = (size - rh) // 2, (size - rw) // 2
+    top, left = (th - rh) // 2, (tw - rw) // 2
     out[top : top + rh, left : left + rw] = resized
     return out
 
@@ -131,6 +133,13 @@ def cache_path_for(file_hash: str, cfg: dict) -> Path:
     return resolve_path(cfg, "cache_dir") / name
 
 
+def cache_index_path(cfg: dict) -> Path:
+    """Fingerprint-keyed like the PNGs, so caches for different preprocess
+    configs (e.g. the hi-res anomaly cache) never clobber each other's index."""
+    name = f"cache_index_v{cfg['preprocess']['version']}_{preprocess_fingerprint(cfg)}.csv"
+    return resolve_path(cfg, "manifests_dir") / name
+
+
 def build_cache(manifest: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     """Preprocess every valid manifest row into the PNG cache. Returns the cache index.
 
@@ -141,7 +150,7 @@ def build_cache(manifest: pd.DataFrame, cfg: dict) -> pd.DataFrame:
     dataset_dir = resolve_path(cfg, "dataset_dir")
     cache_dir = resolve_path(cfg, "cache_dir")
     cache_dir.mkdir(parents=True, exist_ok=True)
-    index_path = resolve_path(cfg, "manifests_dir") / f"cache_index_v{cfg['preprocess']['version']}.csv"
+    index_path = cache_index_path(cfg)
 
     prev_by_hash: dict[str, dict] = {}
     if index_path.exists():

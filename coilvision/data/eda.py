@@ -15,6 +15,7 @@ import matplotlib.pyplot as plt
 import pandas as pd
 
 from coilvision.config import load_config, resolve_path
+from coilvision.data.preprocess import cache_index_path
 
 
 def brightness_by_code(index: pd.DataFrame, cfg: dict) -> pd.DataFrame:
@@ -34,7 +35,7 @@ def main() -> None:
     out_dir = resolve_path(cfg, "artifacts_dir") / "eda"
     out_dir.mkdir(parents=True, exist_ok=True)
     manifest = pd.read_csv(resolve_path(cfg, "manifests_dir") / "manifest.csv", keep_default_na=False)
-    idx_path = resolve_path(cfg, "manifests_dir") / f"cache_index_v{cfg['preprocess']['version']}.csv"
+    idx_path = cache_index_path(cfg)
     index = pd.read_csv(idx_path, keep_default_na=False) if idx_path.exists() else None
 
     lines = ["# EDA report", "", f"Images: {len(manifest)}, valid: {int(manifest['valid'].sum())}", ""]

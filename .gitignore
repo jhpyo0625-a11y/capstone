@@ -13,3 +13,12 @@ quarantine/
 artifacts/*
 !artifacts/manifests/
 models/
+
+# stale pre-fingerprint index name (superseded by cache_index_v1_<fp>.csv)
+artifacts/manifests/cache_index_v1.csv
+# version the annotation JSONs, not the heavy generated HTML pages
+!artifacts/annotation/
+artifacts/annotation/*.html
+
+# user's download copy; canonical file is artifacts/annotation/annotations_val.json
+/annotations_val.json
