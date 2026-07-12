@@ -81,6 +81,7 @@ Source: `Coil-image-Dataset/` — 817 BMP images, all **2448×2048, 24-bit RGB**
 | Label conflicts | **Resolved 2026-07-11** — not conflicts; folder labels confirmed correct (see §2). Training data unfrozen |
 | Model selection metric | **val fail-AUC, macro-F1 tiebreak** (2026-07-12): early-stopping on fail-recall selected the degenerate all-fail predictor (recall 1.0 @ FRR 0.98, run `20260711_231842`); AUC is threshold-free, operating threshold tuned in Phase 4 |
 | Input representation | **768×288 rectangular letterbox + per-image normalization** (2026-07-12): the original 384² square downscaled the winding pitch to ~1.2px — below Nyquist, defect texture aliased away — and ImageNet normalization left per-session exposure shortcuts; observed as val fail-AUC *below* 0.5 while train loss fell (runs `231842`, `234510`) |
+| **Architecture (amends "transfer-learning CNN")** | **Patch-supervised head on frozen features** (2026-07-12): user brush-annotated every defect image (852 strokes total, val+train); model = logistic head (normal/Dent/Loose) on frozen resnet50 patch features at 1536×576, image verdict = top-k P(fail) over winding patches. Rationale: defects span 1-2 wire pitches (~1-2% of pixels); image-level CNN memorized runs (val AUC ≤0.60); unsupervised PatchCore stalled at 0.73 (benign-unusual patches score like defects — hottest patch hit annotations only 8/30). **Val: image fail-AUC 0.983, recall 96.7% @ FRR 8.4%, dent/loose vote 90%.** End-to-end fine-tune of the image CNN (`train/trainer.py`) kept as reference baseline |
 | Filename semantics | **Filenames are provenance only** (2026-07-11): `part#`/`shot#` do not identify a physical part; never use filename fields to infer labels or identity. The classifier decides Pass/Dent/Loose from image content alone |
 
 ---
@@ -269,11 +270,12 @@ watcher (Task Scheduler, hourly count + weekly forced)
 - [x] Leakage unit test (zero run overlap between splits; every valid image in exactly one split)
 - *Acceptance: split summary table (runs/images/classes per split) **approved by user 2026-07-11**; `test_v1` (6 runs / 146 images, ~18% per class) is now the frozen baseline.* ✅
 
-**Phase 3 — Training**
-- [ ] Datamodule + augmentation + class weights
-- [ ] Trainer with early stopping, checkpoints, config snapshots
-- [ ] First trained candidate + measured CPU wall time
-- *Acceptance: training reproducible from one command; val fail-recall reported.*
+**Phase 3 — Training** *(done 2026-07-12, via architecture pivot — see decisions log)*
+- [x] Datamodule + augmentation + class weights (image-CNN path, kept as baseline)
+- [x] Trainer with early stopping, checkpoints, config snapshots (3 runs: best val fail-AUC 0.60 → motivated the pivot)
+- [x] Annotation tooling (`coilvision/annotate.py`) + user-annotated defect regions (val 111 strokes, train 738)
+- [x] First accepted candidate: **patch head** (`coilvision/train/patchclf.py`), 13 min CPU wall — val fail-AUC 0.983, recall 96.7% @ FRR 8.4% (thr 0.9877 on top-20)
+- *Acceptance: training reproducible from one command (`uv run python -m coilvision.train.patchclf`); val fail-recall reported.* ✅
 
 **Phase 4 — Evaluation & Grad-CAM**
 - [ ] Metrics module + threshold selection + per-run breakdown

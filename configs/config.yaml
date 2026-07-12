@@ -115,6 +115,15 @@ anomaly:
   batch_size: 2
   seed: 42
 
+patchclf:
+  # Supervised patch head on frozen anomaly features (2026-07-12): positives =
+  # user-annotated defect cells, negatives = winding cells from train Pass only.
+  min_annot_frac: 0.05                  # grid cell is positive if >=5% annotated
+  negatives_per_image: 150
+  C: 1.0                                # logistic regression inverse regularization
+  top_k: 10                             # image score = mean of top-k P(fail) patches
+  seed: 42
+
 eval:
   fail_recall_target: 0.95              # primary gate metric; macro-F1 tiebreak
 
