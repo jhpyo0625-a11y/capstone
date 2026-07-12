@@ -120,12 +120,15 @@ patchclf:
   # user-annotated defect cells, negatives = winding cells from train Pass only.
   min_annot_frac: 0.05                  # grid cell is positive if >=5% annotated
   negatives_per_image: 150
+  hard_negative_rounds: 1               # mine hottest train-Pass patches, refit (train only)
+  hard_negatives_per_image: 40
   C: 1.0                                # logistic regression inverse regularization
-  top_k: 10                             # image score = mean of top-k P(fail) patches
+  top_k: 20                             # image score = mean of top-k P(fail) patches (top20 best on val)
   seed: 42
 
 eval:
   fail_recall_target: 0.95              # primary gate metric; macro-F1 tiebreak
+  accepted_frr: 0.084                   # user-accepted false-reject rate (2026-07-12, val operating point)
 
 gate:
   # promote iff candidate fail-recall >= production AND candidate macro-F1 > production

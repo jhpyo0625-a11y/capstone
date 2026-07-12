@@ -132,9 +132,8 @@ def winding_mask(img_bgr: np.ndarray, grid: tuple[int, int]) -> np.ndarray:
 def score_frame(extractor: PatchExtractor, frame: pd.DataFrame, bank: torch.Tensor, cfg: dict):
     """Returns dict of score variants per image + masked patch-distance maps.
 
-    raw            = top-k over all patches (v1 behavior)
-    masked         = top-k over winding patches only
-    masked_centered= top-k over (winding distances - their median): run-shift cancels
+    raw_top10        = top-10 over all patches (v1 behavior)
+    masked_top{1,5,10} = top-k over winding patches only
     """
     a = cfg["anomaly"]
     cache_dir = resolve_path(cfg, "cache_dir")

@@ -277,11 +277,16 @@ watcher (Task Scheduler, hourly count + weekly forced)
 - [x] First accepted candidate: **patch head** (`coilvision/train/patchclf.py`), 13 min CPU wall — val fail-AUC 0.983, recall 96.7% @ FRR 8.4% (thr 0.9877 on top-20)
 - *Acceptance: training reproducible from one command (`uv run python -m coilvision.train.patchclf`); val fail-recall reported.* ✅
 
-**Phase 4 — Evaluation & Grad-CAM**
-- [ ] Metrics module + threshold selection + per-run breakdown
-- [ ] Grad-CAM gallery generator
-- [ ] Baseline report on test_v1
-- *Acceptance: fail-recall ≥ 95% at an accepted false-reject rate, or a documented gap analysis + iteration plan.*
+**Phase 4 — Evaluation & explanation gallery** *(in progress 2026-07-12)*
+- [x] Metrics module + val threshold selection + per-run breakdown (`coilvision/eval/report.py`)
+- [x] Explanation gallery: P(fail) patch heatmaps (supersedes Grad-CAM — native to the patch model)
+- [x] Baseline report on test_v1 (one-shot, `artifacts/runs/eval_20260712_221255/`):
+  fail-AUC 0.961, **fail-recall 0.879 @ FRR 0.080 — gate NOT met**;
+  4 misses in 2 runs, all with 800+ hot patches → aggregation (top-k-mean) is
+  breadth-blind, not a detection failure. See `GAP_ANALYSIS.md` in the run dir.
+- [x] Iteration (all selection on val only): breadth-aware aggregation **falsified on val** (hot-frac AUC 0.72 vs top20 0.98 — protocol prevented a test-overfitted fix); **hard-negative mining** adopted (val AUC 0.983→0.992, val FRR 8.4%→4.7%)
+- [x] Final test eval #2 (user-sanctioned, `eval_20260712_224029/`): fail-AUC **0.978**, recall 0.879 @ FRR 0.088 at the val threshold; strictest val policy transfers to **0.939 @ 0.133**; test-optimal shows the gate is reachable at ~14% FRR
+- *Acceptance: fail-recall ≥ 95% at an accepted false-reject rate — **gate not met at the 8.4% FRR budget; documented gap analysis + iteration plan delivered** (`GAP_ANALYSIS.md` in both eval run dirs). Root cause: threshold calibration across only 28 runs, not model ranking. Operating-point choice (recall-first at ~13% FRR vs 87.9% at 8.8%) is a user decision; long-term fix is more runs via the Phase 5-6 retraining pipeline.*
 
 **Phase 5 — Deployment (CLI)**
 - [ ] `coil-predict` CLI + CSV/rollup/overlays + version-pinned production loading
