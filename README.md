@@ -22,6 +22,17 @@ and measurement lives in `COIL_CLASSIFIER_SPEC.md`.
 The first model run downloads pretrained backbone weights (~100 MB, one time —
 needs internet once; everything after is fully offline).
 
+**⚠ The git repo alone is not the whole system.** Image data and models are
+deliberately kept out of git. To move to a new machine (or to back up), copy
+these folders alongside the clone **before** step 3:
+
+- `Coil-image-Dataset\` — the raw images (required; tests and training fail without it)
+- `models\` — the live production model + archive (required for `coil-predict`)
+- `data_accepted\` — images merged by past retraining cycles (required to reproduce training)
+
+Manifests, splits, and annotation JSONs are in git; `artifacts\cache\` rebuilds
+itself on demand.
+
 ## Daily use — inspecting a folder of images
 
 ```
@@ -94,7 +105,7 @@ To roll back: copy that folder's `head.joblib` + `POINTER.json` back into
 
 - `Coil-image-Dataset\` is read-only, forever. New data goes through `incoming\`.
 - The frozen test set (`artifacts\manifests\test_v1.csv`) is the referee for
-  every promotion. Re-baselining it (`python -m coilvision.data.split --refreeze`)
+  every promotion. Re-baselining it (`uv run python -m coilvision.data.split --refreeze`)
   invalidates all past comparisons — deliberate act only.
 - Don't hand-edit the `preprocess:` section of `configs\config.yaml`: every
   cache and the production model are fingerprinted against it, and
@@ -112,6 +123,7 @@ To roll back: copy that folder's `head.joblib` + `POINTER.json` back into
 | Watcher never fires | Is the task registered? (`Get-ScheduledTask CoilVisionWatcher`) Check `artifacts\watcher.log` and `artifacts\pipeline_state.json`. |
 | Everything quarantined | Check `quarantine\quarantine_log.csv` reasons — usually wrong image size or renamed files. |
 | First run very slow | One-time pretrained-weight download; needs internet once. |
+| `Warning: ... unauthenticated requests to the HF Hub` in logs | Harmless (anonymous model-weight cache check). Ignore. |
 | Disk fills up | `artifacts\cache\` holds preprocessed images (a few GB); safe to delete stale fingerprints (they rebuild on demand). |
 
 ## Repository map
