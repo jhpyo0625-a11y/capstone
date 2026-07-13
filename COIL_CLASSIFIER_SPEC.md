@@ -1,8 +1,11 @@
 # Coil Defect Classifier — Project Spec & Plan
 
-**Status:** Draft v2 — label-conflict question **resolved 2026-07-11** (not conflicts; filename part numbers don't identify physical parts — see §2). Unblocked for Phase 0 completion.
+**Status:** **v1.0 — all phases complete (2026-07-13).** Production model live
+(`models/production/`, test recall 93.9% @ 13.3% FRR); automated retraining
+drilled; operations documented in `README.md`. This document remains the
+decision/measurement record.
 **Owner:** jhpyo · **Lead dev:** Claude
-**Last updated:** 2026-07-11
+**Last updated:** 2026-07-13
 
 ---
 
@@ -303,10 +306,11 @@ watcher (Task Scheduler, hourly count + weekly forced)
 - *Acceptance: drill passed; the bad-model rejection was REAL, not simulated — the new val (containing unannotated drill runs) dragged the val-recall-1.0 threshold down and the gate caught it.* ✅
 - **Finding for operations:** the val-recall-100% threshold policy is sensitive to val composition; annotate incoming defect images promptly (calibration, not just training), and consider a 0.98 policy target if real incoming data reproduces this.
 
-**Phase 7 — Docs & handoff**
-- [ ] README: setup, daily use, retraining ops, troubleshooting
-- [ ] Final walkthrough
-- *Acceptance: user can operate everything without Claude.*
+**Phase 7 — Docs & handoff** *(delivered 2026-07-13)*
+- [x] README: setup, daily use (`predict.bat` + CSV glossary), retraining ops (watcher registration, annotation duty, quarantine reasons, rollback), honesty rules, troubleshooting table, repo map
+- [x] CLAUDE.md updated to the final architecture (patch model, single scoring path, fingerprint discipline, val-annotations-never-train)
+- [x] Final walkthrough delivered in session
+- *Acceptance: user can operate everything without Claude — **pending user read-through of README.md**.*
 
 ---
 
