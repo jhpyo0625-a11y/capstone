@@ -82,11 +82,24 @@ def score_processed(extractor: PatchExtractor, head, img_bgr: np.ndarray, top_k:
     }
 
 
-def dataset_key(cfg: dict, ann: dict) -> str:
+def load_train_annotations(cfg: dict) -> dict:
+    """Merge every annotations_train*.json — the retrain pipeline generates a
+    new page (and thus a new JSON) whenever un-annotated defect images arrive."""
+    ann_dir = resolve_path(cfg, "artifacts_dir") / "annotation"
+    files = sorted(ann_dir.glob("annotations_train*.json"))
+    if not files:
+        raise FileNotFoundError(f"no annotations_train*.json in {ann_dir}")
+    merged: dict = {}
+    for f in files:
+        merged.update(load_annotations(f))
+    return merged
+
+
+def dataset_key(cfg: dict, ann: dict, train_hashes: list[str]) -> str:
     """Cache key for the patch dataset: annotation content + preprocess
-    fingerprint + the sampling params that shape the dataset. Any of these
-    changing must invalidate the cached npz (mining params excluded — mining
-    runs after this cache)."""
+    fingerprint + sampling params + the TRAIN SPLIT CONTENT (retraining with
+    new incoming images must invalidate). Mining params excluded — mining runs
+    after this cache."""
     p = cfg["patchclf"]
     blob = json.dumps(
         {
@@ -94,6 +107,7 @@ def dataset_key(cfg: dict, ann: dict) -> str:
             "min_annot_frac": p["min_annot_frac"],
             "negatives_per_image": p["negatives_per_image"],
             "seed": p["seed"],
+            "train_hashes": sorted(train_hashes),
         },
         sort_keys=True,
     ).encode()
@@ -102,10 +116,12 @@ def dataset_key(cfg: dict, ann: dict) -> str:
 
 def build_patch_dataset(cfg: dict, extractor: PatchExtractor, ann: dict) -> tuple[np.ndarray, np.ndarray]:
     """(X, y) patch features/labels from the train split. Cached to disk keyed
-    by dataset_key (annotations + preprocess fingerprint + sampling params)."""
+    by dataset_key (annotations + preprocess fingerprint + sampling params +
+    train split content)."""
     p = cfg["patchclf"]
     cache_dir = resolve_path(cfg, "cache_dir")
-    npz_path = cache_dir / f"patch_dataset_{dataset_key(cfg, ann)}.npz"
+    key = dataset_key(cfg, ann, list(load_split_frame("train", cfg)["hash"]))
+    npz_path = cache_dir / f"patch_dataset_{key}.npz"
     if npz_path.exists():
         d = np.load(npz_path)
         print(f"patch dataset loaded from cache: X={d['X'].shape}")
@@ -183,17 +199,26 @@ def score_images(cfg: dict, extractor: PatchExtractor, head, frame: pd.DataFrame
     return {k: np.array(v) for k, v in scores.items()}, dent_vs_loose, maps
 
 
-def main() -> None:
+def train_candidate(cfg: dict) -> dict:
+    """Full candidate training + val evaluation. Returns run metadata for the
+    retrain pipeline (head path, val scores path, metrics, annotation coverage)."""
     t0 = time.time()
-    cfg = anomaly_cfg(load_config())
-    out_dir = resolve_path(cfg, "artifacts_dir") / "runs" / time.strftime("patchclf_%Y%m%d_%H%M%S")
+    run_id = time.strftime("patchclf_%Y%m%d_%H%M%S")
+    out_dir = resolve_path(cfg, "artifacts_dir") / "runs" / run_id
     out_dir.mkdir(parents=True, exist_ok=True)
     p = cfg["patchclf"]
 
     manifest = pd.read_csv(resolve_path(cfg, "manifests_dir") / "manifest.csv", keep_default_na=False)
     build_cache(manifest, cfg)  # ensure hi-res cache (reused if present)
 
-    ann = load_annotations(resolve_path(cfg, "artifacts_dir") / "annotation" / "annotations_train.json")
+    ann = load_train_annotations(cfg)
+    train = load_split_frame("train", cfg)
+    train_defects = train[train["class"] != "Pass"]
+    unannotated = [r for r in train_defects["relpath"] if r not in ann or not (ann[r]["strokes"] or ann[r]["boxes"])]
+    if unannotated:
+        print(f"NOTE: {len(unannotated)} train defect images have no annotations yet "
+              f"(they contribute to val/eval only, not patch supervision)")
+
     extractor = PatchExtractor(cfg)
     X, y = build_patch_dataset(cfg, extractor, ann)
     head = LogisticRegression(max_iter=3000, C=p["C"], class_weight="balanced")
@@ -249,14 +274,19 @@ def main() -> None:
     val_cols = ["relpath", "class", "run", "dent_vs_loose_vote"] + [f"score_{n}" for n in score_variants]
     val[val_cols].to_csv(out_dir / "val_scores.csv", index=False)
     save_heatmaps(val, maps, score_variants[best_name], cfg, out_dir)
-    (out_dir / "summary.json").write_text(
-        json.dumps({"val_image_fail_auc": aucs, "best_variant": best_name,
-                    "dent_vs_loose_val_acc": dl_acc, "train_patch_auc": float(train_patch_auc),
-                    "n_patches": int(len(y)), "label_counts": np.bincount(y).tolist(),
-                    "wall_time_min": round((time.time() - t0) / 60, 1)}, indent=2),
-        encoding="utf-8",
-    )
+    summary = {"run_id": run_id, "val_image_fail_auc": aucs, "best_variant": best_name,
+               "dent_vs_loose_val_acc": dl_acc, "train_patch_auc": float(train_patch_auc),
+               "n_patches": int(len(y)), "label_counts": np.bincount(y).tolist(),
+               "n_unannotated_train_defects": len(unannotated),
+               "wall_time_min": round((time.time() - t0) / 60, 1)}
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(f"\ndone in {(time.time() - t0) / 60:.1f} min -> {out_dir}")
+    return {**summary, "run_dir": out_dir, "head_path": out_dir / "head.joblib",
+            "val_scores_path": out_dir / "val_scores.csv", "unannotated_relpaths": unannotated}
+
+
+def main() -> None:
+    train_candidate(anomaly_cfg(load_config()))
 
 
 if __name__ == "__main__":

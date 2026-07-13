@@ -86,19 +86,23 @@ def test_config_change_invalidates_cache(tmp_path):
     assert (resolve_path(cfg, "cache_dir") / index.iloc[0]["cache_file"]).exists()  # regenerated under new key
 
 
+from coilvision.anomaly import anomaly_cfg
+
 MANIFEST_PATH = resolve_path(CFG, "manifests_dir") / "manifest.csv"
-INDEX_PATH = cache_index_path(CFG)
+PROD_CFG = anomaly_cfg(CFG)  # the production/pipeline path maintains the hi-res cache
+PROD_INDEX = cache_index_path(PROD_CFG)
 
 
-@pytest.mark.skipif(not (MANIFEST_PATH.exists() and INDEX_PATH.exists()), reason="cache not built yet")
-def test_real_cache_consistent_with_manifest():
+@pytest.mark.skipif(not (MANIFEST_PATH.exists() and PROD_INDEX.exists()), reason="cache not built yet")
+def test_production_cache_consistent_with_manifest():
     manifest = pd.read_csv(MANIFEST_PATH, keep_default_na=False)
-    index = pd.read_csv(INDEX_PATH, keep_default_na=False)
+    index = pd.read_csv(PROD_INDEX, keep_default_na=False)
     assert len(index) == int(manifest["valid"].sum())
-    cache_dir = resolve_path(CFG, "cache_dir")
+    cache_dir = resolve_path(PROD_CFG, "cache_dir")
     missing = [f for f in index["cache_file"] if not (cache_dir / f).exists()]
     assert not missing, f"{len(missing)} index rows point at missing PNGs"
-    size = CFG["preprocess"]["resize"]
+    size = PROD_CFG["preprocess"]["resize"]
     tw, th = (size, size) if isinstance(size, int) else (size[0], size[1])
     sample = cv2.imread(str(cache_dir / index.iloc[0]["cache_file"]))
     assert sample.shape == (th, tw, 3)
+    assert set(index["hash"]) <= set(manifest["hash"])

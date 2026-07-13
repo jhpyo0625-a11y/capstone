@@ -296,11 +296,12 @@ watcher (Task Scheduler, hourly count + weekly forced)
 - [x] Demo on a fresh mixed folder from test runs: 2 Dents flagged FAIL/Dent (0.99+), 3 Passes passed, corrupt file → ERROR row
 - *Acceptance: user runs it on a fresh folder and the report is correct/readable — **pending user's own run**.*
 
-**Phase 6 — Automated retraining**
-- [ ] Orchestrator (steps 1–8 above) + lock + reports
-- [ ] Watcher + Task Scheduler registration script
-- [ ] Dry-run drill: drop 50 images into `incoming/`, watch full auto cycle promote/reject correctly
-- *Acceptance: the drill passes untouched, including a deliberate bad-model rejection test.*
+**Phase 6 — Automated retraining** *(built 2026-07-13)*
+- [x] Orchestrator (`pipeline/retrain.py`, steps 1–8) + lock (stale-break) + PIPELINE_REPORT.md + state file; multi-root manifest (`data_accepted/` merges validated incoming; raw dataset untouched); frozen-test-run images excluded & reported; auto-generates an annotation page for un-annotated incoming defects
+- [x] Watcher (`pipeline/watcher.py`: ≥50 images or any-new + 7 days) + `scripts/watcher.bat` + `scripts/register_task.ps1` (hourly Task Scheduler; not yet registered — user's call)
+- [x] Dry-run drill (2026-07-13, runs `retrain_20260712_232617` + `_20260713_003048`): 52 files dropped → 50 accepted, 2 quarantined with reasons, 0 duplicates; manifest 867 across 2 roots; splits regenerated around frozen test; candidate trained; **gate correctly REJECTED a genuinely miscalibrated candidate** (its val-derived threshold 0.759 → test FRR 0.814, macro-F1 0.363 vs production 0.796); production untouched, state updated
+- *Acceptance: drill passed; the bad-model rejection was REAL, not simulated — the new val (containing unannotated drill runs) dragged the val-recall-1.0 threshold down and the gate caught it.* ✅
+- **Finding for operations:** the val-recall-100% threshold policy is sensitive to val composition; annotate incoming defect images promptly (calibration, not just training), and consider a 0.98 policy target if real incoming data reproduces this.
 
 **Phase 7 — Docs & handoff**
 - [ ] README: setup, daily use, retraining ops, troubleshooting

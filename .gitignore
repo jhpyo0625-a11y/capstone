@@ -22,3 +22,6 @@ artifacts/annotation/*.html
 
 # user's download copy; canonical file is artifacts/annotation/annotations_val.json
 /annotations_val.json
+
+# validated incoming images (pipeline-managed data, never in git)
+data_accepted/
