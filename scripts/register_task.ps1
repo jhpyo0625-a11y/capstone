@@ -5,7 +5,7 @@
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $action = New-ScheduledTaskAction -Execute "$projectRoot\scripts\watcher.bat" -WorkingDirectory $projectRoot
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1) `
-    -RepetitionInterval (New-TimeSpan -Hours 1)
+    -RepetitionInterval (New-TimeSpan -Hours 1) -RepetitionDuration ([TimeSpan]::MaxValue)
 $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable -DontStopOnIdleEnd `
     -ExecutionTimeLimit (New-TimeSpan -Hours 4)
 Register-ScheduledTask -TaskName "CoilVisionWatcher" -Action $action -Trigger $trigger `

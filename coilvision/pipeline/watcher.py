@@ -32,13 +32,21 @@ def should_run(n_new: int, last_success: str | None, now: datetime, retrain_cfg:
 
 
 def main() -> None:
+    import pandas as pd
+
     cfg = anomaly_cfg(load_config())
-    n_new = sum(1 for _ in resolve_path(cfg, "incoming_dir").rglob("*.bmp"))
+    n_incoming = sum(1 for _ in resolve_path(cfg, "incoming_dir").rglob("*.bmp"))
+    # a crashed run may have merged files without processing them — count those as new
+    manifest_path = resolve_path(cfg, "manifests_dir") / "manifest.csv"
+    manifest = pd.read_csv(manifest_path, keep_default_na=False) if manifest_path.exists() else pd.DataFrame()
+    drift = max(0, retrain.unmanifested_accepted(cfg, manifest))
     state = retrain.read_state(cfg)
-    fire, reason = should_run(n_new, state.get("last_success"), datetime.now(), cfg["retrain"])
+    fire, reason = should_run(n_incoming + drift, state.get("last_success"), datetime.now(), cfg["retrain"])
+    if drift:
+        reason += f" (incl. {drift} unprocessed from a previous run)"
     print(f"watcher {time.strftime('%Y-%m-%d %H:%M:%S')}: {reason} -> {'RUN' if fire else 'skip'}")
     if fire:
-        retrain.run(trigger=f"watcher: {reason}")
+        retrain.run(force=drift > 0 and n_incoming == 0, trigger=f"watcher: {reason}")
 
 
 if __name__ == "__main__":

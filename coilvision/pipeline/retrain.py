@@ -57,7 +57,7 @@ def acquire_lock(cfg: dict) -> Path:
         age_h = (time.time() - lock.stat().st_mtime) / 3600
         if age_h < cfg["retrain"]["lock_stale_hours"]:
             raise RuntimeError(f"another retrain is running (lock {lock}, {age_h:.1f}h old)")
-        print(f"WARNING: breaking stale lock ({age_h:.1f}h old — crashed run?)")
+        print(f"WARNING: breaking stale lock ({age_h:.1f}h old -- crashed run?)")
         lock.unlink()
     lock.write_text(f"{time.strftime('%Y-%m-%d %H:%M:%S')}\n", encoding="utf-8")
     return lock
@@ -77,6 +77,7 @@ def read_state(cfg: dict) -> dict:
 def ingest_incoming(cfg: dict, known_hashes: set[str]) -> dict:
     incoming = resolve_path(cfg, "incoming_dir")
     accepted = resolve_path(cfg, "accepted_dir")
+    dataset_root = resolve_path(cfg, "dataset_dir")
     quarantine = resolve_path(cfg, "quarantine_dir")
     stats = {"accepted": 0, "quarantined": 0, "duplicates": 0, "by_class": Counter(), "reasons": Counter()}
     for path in sorted(incoming.rglob("*.bmp")):
@@ -92,17 +93,31 @@ def ingest_incoming(cfg: dict, known_hashes: set[str]) -> dict:
             quarantine_file(path, ["duplicate_content"], quarantine)
             stats["duplicates"] += 1
             continue
+        # relpath must stay globally unique across BOTH roots: annotations and
+        # joins key on it. Same name + different bytes (dedupe already passed)
+        # is suspicious — renaming would break the filename schema, so a human
+        # should look at it instead.
         dest = accepted / rel
+        if dest.exists() or (dataset_root / rel).exists():
+            quarantine_file(path, ["name_collision"], quarantine)
+            stats["quarantined"] += 1
+            stats["reasons"]["name_collision"] += 1
+            continue
         dest.parent.mkdir(parents=True, exist_ok=True)
-        n = 1
-        while dest.exists():
-            dest = dest.with_name(f"{rel.stem}_{n}{rel.suffix}")
-            n += 1
         shutil.move(str(path), str(dest))
         known_hashes.add(file_hash)
         stats["accepted"] += 1
         stats["by_class"][str(rel.parts[0] if rel.parts[0] != "Fail" else "/".join(rel.parts[:2]))] += 1
     return stats
+
+
+def unmanifested_accepted(cfg: dict, manifest: pd.DataFrame) -> int:
+    """Files sitting in data_accepted/ that the manifest doesn't know yet —
+    the signature of a run that crashed after ingest. A rerun must proceed."""
+    accepted = resolve_path(cfg, "accepted_dir")
+    on_disk = sum(1 for _ in accepted.rglob("*.bmp")) if accepted.exists() else 0
+    in_manifest = int((manifest["root"] == "accepted").sum()) if "root" in manifest.columns else 0
+    return on_disk - in_manifest
 
 
 # ---------- step 5-6: gate ----------
@@ -149,8 +164,12 @@ def run(force: bool = False, trigger: str = "manual") -> dict:
                   f"duplicates {stats['duplicates']}", ""]
         print(f"ingest: +{stats['accepted']} accepted, {stats['quarantined']} quarantined, "
               f"{stats['duplicates']} duplicates")
-        if stats["accepted"] == 0 and not force:
-            raise RuntimeError("nothing accepted from incoming/ and --force not given — aborting")
+        drift = unmanifested_accepted(cfg, old_manifest)
+        if drift > 0:
+            lines += [f"Resuming unfinished merge: {drift} accepted file(s) not yet in the manifest.", ""]
+            print(f"resuming unfinished merge: {drift} accepted file(s) not yet manifested")
+        if stats["accepted"] == 0 and drift <= 0 and not force:
+            raise RuntimeError("nothing accepted from incoming/, no unfinished merge, and --force not given")
 
         # 2: manifest + cache
         manifest = manifest_mod.build_manifest(cfg)
