@@ -11,18 +11,21 @@ Python 3.14 is system default but PyTorch needs **Python 3.12** — always use t
 ```bash
 uv run pytest                    # run tests (must stay green)
 uv run pytest tests/test_split.py   # leakage checks specifically
-scripts/retrain.bat              # full pipeline: ingest→train→eval→gate→promote
-coil-predict <folder> --overlays # batch inference → CSV + Grad-CAM overlays
+scripts/retrain.bat [--force]    # full pipeline: ingest→train→gate→promote/reject
+scripts/predict.bat <folder> --overlays  # batch inference → CSV + P(fail) heatmaps
+uv run python -m coilvision.train.patchclf   # retrain just the patch head
 ```
 
 ## Core files
 
-- `COIL_CLASSIFIER_SPEC.md` — spec, decisions log, task breakdown
+- `COIL_CLASSIFIER_SPEC.md` — spec, decisions log (READ THIS: every pivot is recorded with evidence)
 - `configs/config.yaml` — every knob (paths, model, thresholds, promotion gate); never hardcode these
-- `coilvision/data/manifest.py` — filename parser; manifest is the single source of truth downstream
+- `coilvision/train/patchclf.py` — THE model: logistic head on frozen resnet50 patch features; `score_processed` is the single scoring path shared by eval and serving
+- `coilvision/data/manifest.py` — multi-root manifest (raw dataset + `data_accepted/`); single source of truth downstream
 - `coilvision/data/split.py` — grouped splits; `artifacts/manifests/test_v1.csv` is the frozen test set
-- `coilvision/pipeline/retrain.py` — retraining orchestrator
-- `models/production/POINTER.json` — which model is live, its threshold + preprocess version
+- `coilvision/pipeline/retrain.py` — retraining orchestrator + promotion gate
+- `coilvision/annotations.py` + `annotate.py` — user defect-region annotations drive patch supervision
+- `models/production/POINTER.json` — which model is live, its threshold + preprocess fingerprint
 
 ## Hard rules (data integrity)
 
@@ -33,6 +36,8 @@ coil-predict <folder> --overlays # batch inference → CSV + Grad-CAM overlays
 - The frozen test set is never touched by retraining; refreshing it is a deliberate manual act (`test_v2` + gate re-baseline).
 - The `[code]` filename field may encode the machine's verdict — keep it away from model inputs and split logic.
 - Predictions are reported **per image only** — there is no filename key to roll up to physical parts.
+- **Val annotations never train.** `annotations_val.json` is diagnostic/eval only; training uses `annotations_train*.json` exclusively. The frozen test set has been evaluated exactly as recorded in the spec — never score it casually.
+- Anything keyed by a **preprocess fingerprint** (caches, indexes, models) auto-invalidates on config change; never work around a fingerprint-mismatch error — it's the system refusing silent staleness.
 
 ## Style & conventions
 
