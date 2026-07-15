@@ -1,20 +1,61 @@
 # CLAUDE.md
 
-Coil defect classifier: local, CPU-only CNN (EfficientNet-B0 via timm) that classifies wound-coil flex-PCB images as **Pass / Dent / Loose**, with Grad-CAM explanations and an automated gated retraining pipeline. Windows 11, no cloud — data never leaves this machine.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-**Read `COIL_CLASSIFIER_SPEC.md` before any nontrivial work.** It is the source of truth for decisions, phases, and open questions.
+Coil defect classifier: local, CPU-only classifier that labels wound-coil flex-PCB images **Pass / Dent / Loose**, with patch-level P(fail) heatmap explanations and an automated gated retraining pipeline. Windows 11, no cloud — data never leaves this machine. Production model is v1.0 (2026-07-13); see `README.md` for the operating manual (daily inference, retraining, rollback, troubleshooting).
+
+**Read `COIL_CLASSIFIER_SPEC.md` before any nontrivial work.** It is the source of truth for decisions, phases, and open questions — including the architecture pivot below.
 
 ## Commands
 
 Python 3.14 is system default but PyTorch needs **Python 3.12** — always use the pinned venv (`uv venv --python 3.12` / `py -3.12`).
 
 ```bash
-uv run pytest                    # run tests (must stay green)
-uv run pytest tests/test_split.py   # leakage checks specifically
-scripts/retrain.bat [--force]    # full pipeline: ingest→train→gate→promote/reject
-scripts/predict.bat <folder> --overlays  # batch inference → CSV + P(fail) heatmaps
-uv run python -m coilvision.train.patchclf   # retrain just the patch head
+uv run pytest                                    # run tests (must stay green)
+uv run pytest tests/test_split.py                # leakage checks specifically
+uv run pytest tests/test_split.py -k leakage      # a single test by name
+scripts/retrain.bat [--force]                    # full pipeline: ingest→train→gate→promote/reject
+scripts/predict.bat <folder> --overlays          # batch inference → CSV + P(fail) heatmaps
+uv run python -m coilvision.train.patchclf       # retrain just the patch head
 ```
+
+## Architecture — the pipeline, package by package
+
+The production model is **not** the CNN the config's `train:` section describes —
+that whole-image EfficientNet-B0/ConvNeXt path (Phase 3) and the `anomaly:`
+PatchCore experiment were both superseded (2026-07-12; see decisions log).
+Production is `patchclf:` in `configs/config.yaml`: a **logistic-regression
+head on frozen ResNet50 patch features**, supervised by user-drawn defect
+annotations. Data flows through `coilvision/` as:
+
+1. **`data/`** — `manifest.py` builds the single source of truth (raw dataset
+   + `data_accepted/`, run-grouped); `preprocess.py` crops the OSD strip and
+   caches processed images keyed by a config fingerprint; `split.py` makes
+   grouped train/val/test splits (`test_v1.csv` frozen); `validate.py`
+   quarantines bad files before they reach a manifest.
+2. **`annotate.py` / `annotations.py`** — serves the HTML annotation tool and
+   parses the defect-region JSON it produces; this is the label source for
+   patch supervision (`annotations_train*.json` only — `annotations_val.json`
+   is diagnostic and must never train).
+3. **`train/patchclf.py`** — THE model. Extracts frozen-ResNet50 patch
+   features (`train/datamodule.py` loads/grids images), fits the logistic
+   head against annotated positives + mined hard negatives, and exposes
+   `score_processed`, the one scoring path shared by eval and serving.
+   `train/trainer.py` holds the older two-stage CNN trainer (legacy path).
+4. **`eval/`** — `metrics.py` computes fail-recall/macro-F1 at swept
+   thresholds; `report.py` produces the formal evaluation + gallery;
+   `gradcam.py` renders explanation overlays.
+5. **`predict/cli.py`** — the `coil-predict` entry point (also driven by
+   `scripts/predict.bat`): loads `models/production/POINTER.json`, checks its
+   preprocess fingerprint, scores a folder, writes CSV + optional overlays.
+6. **`pipeline/`** — `retrain.py` orchestrates a full cycle (validate → merge
+   into `data_accepted/` → rebuild manifest/splits → train candidate → gate
+   candidate vs. production on the frozen test set → `promote.py` swaps
+   `POINTER.json` and archives the old model); `watcher.py` is the scheduled
+   trigger (`scripts/register_task.ps1`) that fires `retrain.py` on new-image
+   thresholds.
+
+Every stage reads its knobs from `configs/config.yaml` via `coilvision/config.py` — never hardcode paths, thresholds, or the backbone choice.
 
 ## Core files
 
